@@ -1,0 +1,22 @@
+{
+  "name": "dj-system",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "tunnel": "sh scripts/tunnel.sh",
+    "db:migrate:local": "wrangler d1 migrations apply dj-system --local",
+    "db:migrate:remote": "wrangler d1 migrations apply dj-system --remote",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.13.13",
+    "qrcode-generator": "^2.0.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261018.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.151.1"
+  }
+}

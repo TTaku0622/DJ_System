@@ -1,0 +1,4 @@
+SPOTIFY_CLIENT_ID=
+SPOTIFY_CLIENT_SECRET=
+# ホスト画面に入るための合言葉（長めのランダム文字列）
+HOST_KEY=

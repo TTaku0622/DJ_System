@@ -1,0 +1,18 @@
+name = "dj-system"
+main = "src/index.tsx"
+compatibility_date = "2026-09-01"
+
+# public/ の CSS・JS をそのまま配信する
+[assets]
+directory = "./public"
+
+# database_id は `npx wrangler d1 create dj-system` の結果に置き換える（ローカルでは任意の値で動く）
+[[d1_databases]]
+binding = "DB"
+database_name = "dj-system"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# 1分ごとに再生状態を確認し、止まっていたらデフォルトの曲を流し直す
+[triggers]
+crons = ["* * * * *"]
