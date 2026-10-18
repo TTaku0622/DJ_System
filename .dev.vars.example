@@ -1,4 +1,4 @@
 SPOTIFY_CLIENT_ID=
 SPOTIFY_CLIENT_SECRET=
-# ホスト画面に入るための合言葉（長めのランダム文字列）
+# ホスト用 URL（/host/enter/<この値>）に使う長いランダム文字列: openssl rand -hex 24
 HOST_KEY=

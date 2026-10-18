@@ -3,22 +3,6 @@ import type { Session } from '../player'
 import type { Playlist } from '../spotify'
 import { Layout } from './Layout'
 
-export const HostLogin = (props: { error?: boolean }) => (
-  <Layout title="ホスト" bodyClass="center">
-    <main class="card">
-      <h1>ホスト</h1>
-      <form method="post" action="/host/login" class="stack">
-        <label>
-          合言葉
-          <input type="password" name="key" required autofocus autocomplete="current-password" />
-        </label>
-        {props.error && <p class="error">合言葉が違います</p>}
-        <button class="primary">入る</button>
-      </form>
-    </main>
-  </Layout>
-)
-
 type HostProps = {
   connected: boolean
   authorizedAt?: number
@@ -63,6 +47,9 @@ export const HostPage = (p: HostProps) => (
                   コピー
                 </button>
               </div>
+              <button type="button" class="primary wide" data-share="share-url" hidden>
+                LINE などで共有
+              </button>
               <a class="button" href={`/s/${p.session.id}`} target="_blank">
                 ゲスト画面を開く
               </a>
@@ -80,7 +67,8 @@ export const HostPage = (p: HostProps) => (
                 </button>
               </form>
               <form method="post" action="/host/session/end">
-                <button class="danger wide">セッションを終了（URL を無効にする）</button>
+                <button class="danger wide">セッションを終了</button>
+                <small class="muted">終了すると共有 URL は使えなくなります</small>
               </form>
             </section>
           )}

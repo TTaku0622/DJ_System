@@ -5,7 +5,8 @@
 - リクエスト曲は Spotify のキューに入るので、今の曲が終わるとリクエスト順で流れる（アプリの操作は不要）。プレイリストの末尾にも記録する
 - リクエストがないときは、紐付けたプレイリストがデフォルトの曲として流れる。最後まで流れて止まったら自動で最初から流し直す（ホスト画面で ON/OFF）
 - 追加は「＋ そのまま」「✎ ニックネーム・コメント付き」の2通り
-- アクセス制限は推測できない共有 URL だけ。セッションを終了するとその URL は無効になる
+- アクセス制限は推測できない URL だけ。ゲストは共有 URL、ホストは `/host/enter/<HOST_KEY>` を開くだけ（ホストは一度開けば90日間ブラウザが覚える）。セッションを終了すると共有 URL は無効になる
+- ホスト画面に QR・リンクのコピー・共有ボタン（スマホなら LINE などに直接送れる）がある
 
 技術: Cloudflare Workers / Hono / D1 / Spotify Web API
 
@@ -13,7 +14,7 @@
 1. Spotify Developer Dashboard でアプリを作る（所有者の Premium が必要）。Redirect URI に次を登録する
    - `http://127.0.0.1:8787/callback`（テスト用）
    - `https://dj-system.<アカウント>.workers.dev/callback`（本番用）
-2. `cp .dev.vars.example .dev.vars` で作ったファイルに `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` / `HOST_KEY`（ホスト画面の合言葉）を書く
+2. `cp .dev.vars.example .dev.vars` で作ったファイルに `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` / `HOST_KEY`（ホスト用 URL に使う長いランダム文字列。`openssl rand -hex 24` で作る）を書く
 3. `npm install`
 
 ## テスト（Mac + TryCloudflare）
@@ -21,7 +22,7 @@
 brew install cloudflared   # 初回のみ
 npm run tunnel
 ```
-- Mac のブラウザで `http://127.0.0.1:8787/host` を開き、合言葉 → Spotify 連携 → プレイリストを選んで開始
+- Mac のブラウザで `http://127.0.0.1:8787/host/enter/<HOST_KEY>` を開き（起動時に表示される）、Spotify 連携 → プレイリストを選んで開始
 - 出てきた QR（`https://xxxx.trycloudflare.com/s/...`）をスマホで読む
 - Spotify 連携は 127.0.0.1 から行う（TryCloudflare の URL は毎回変わるので Spotify に登録できない）
 
@@ -35,6 +36,7 @@ npx wrangler secret put SPOTIFY_CLIENT_SECRET
 npx wrangler secret put HOST_KEY
 npm run deploy
 ```
+本番のホスト画面は `https://dj-system.<アカウント>.workers.dev/host/enter/<HOST_KEY>` をブックマークしておく。
 GitHub に push して自動で反映したい場合は、Cloudflare ダッシュボードの Workers → 設定 → Builds でこのリポジトリをつなぐ。
 
 ## 注意

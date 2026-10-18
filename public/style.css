@@ -17,6 +17,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; overflow-x: hidden; }
 body {
   background: var(--bg);
@@ -184,6 +185,7 @@ body.host .app { padding-bottom: 32px; }
 .qr { background: #fff; border-radius: 16px; padding: 12px; width: min(100%, 320px); margin: 0 auto; }
 .qr svg { width: 100%; height: auto; }
 .copy-row { display: flex; gap: 8px; }
+.copy-row button { flex: none; white-space: nowrap; }
 .copy-row input { font-size: 14px !important; }
 .toggle-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .toggle-row span { display: flex; flex-direction: column; }

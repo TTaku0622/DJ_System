@@ -4,7 +4,7 @@ import qrcode from 'qrcode-generator'
 import { activeSession, addRequest, invalidatePlayback, playback, Session, startPlaylist, stateView, syncSession } from './player'
 import { authorizeUrl, Env, exchangeCode, myPlaylists, searchTracks, SpotifyError, tokenStatus } from './spotify'
 import { GuestPage } from './views/Guest'
-import { HostLogin, HostPage } from './views/Host'
+import { HostPage } from './views/Host'
 import { MessagePage } from './views/Layout'
 
 type AppEnv = { Bindings: Env; Variables: { session: Session } }
@@ -32,13 +32,13 @@ const isHost = async (c: Context<AppEnv>) => (await getSignedCookie(c, c.env.HOS
 
 app.get('/', (c) => c.html(<MessagePage title="DJ" message="共有された URL から開いてください。" />))
 
-app.post('/host/login', async (c) => {
-  const form = await c.req.formData()
-  if (form.get('key') !== c.env.HOST_KEY) return c.html(<HostLogin error />, 401)
-  // SameSite=Strict なので、よそのサイトからホスト操作を送らせることはできない
+// ホスト用 URL（/host/enter/<HOST_KEY>）を開くと、このブラウザをホストとして覚える
+app.get('/host/enter/:key', async (c) => {
+  if (c.req.param('key') !== c.env.HOST_KEY) return notHost(c)
+  // Lax: Spotify 連携から戻ったときも送られる。よそのサイトからの POST には付かないのでホスト操作は送らせられない
   await setSignedCookie(c, 'host', '1', c.env.HOST_KEY, {
     httpOnly: true,
-    sameSite: 'Strict',
+    sameSite: 'Lax',
     secure: isHttps(c),
     path: '/',
     maxAge: 60 * 60 * 24 * 90,
@@ -46,14 +46,16 @@ app.post('/host/login', async (c) => {
   return c.redirect('/host')
 })
 
+const notHost = (c: Context<AppEnv>) =>
+  c.html(<MessagePage title="ページが見つかりません" message="ホスト用の URL から開いてください。" />, 404)
+
 app.use('/host/*', async (c, next) => {
-  if (c.req.path === '/host' || c.req.path === '/host/login') return next()
-  if (!(await isHost(c))) return c.redirect('/host')
+  if (c.req.path.startsWith('/host/enter/')) return next()
+  if (!(await isHost(c))) return notHost(c)
   return next()
 })
 
 app.get('/host', async (c) => {
-  if (!(await isHost(c))) return c.html(<HostLogin />)
   const status = await tokenStatus(c.env)
   const session = await activeSession(c.env)
   let playlists: Awaited<ReturnType<typeof myPlaylists>> = []
