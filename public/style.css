@@ -11,7 +11,6 @@
   --danger: #ff5c7a;
   --radius: 18px;
   --gutter: 16px;
-  --bar-h: 72px;
   --safe-b: env(safe-area-inset-bottom, 0px);
   color-scheme: dark;
 }
@@ -32,7 +31,7 @@ img { display: block; }
 button, input, .button { font: inherit; color: inherit; }
 
 .app { max-width: 560px; margin: 0 auto; padding: 0 var(--gutter); }
-body.guest .app { padding-bottom: calc(var(--bar-h) + var(--safe-b) + 24px); }
+body.guest .app { padding-bottom: calc(var(--safe-b) + 24px); }
 body.center { min-height: 100dvh; display: grid; place-items: center; padding: var(--gutter); }
 
 /* ---- 共通パーツ ---- */
@@ -40,10 +39,10 @@ body.center { min-height: 100dvh; display: grid; place-items: center; padding: v
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 14px 0 10px;
 }
-.brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 800; letter-spacing: .08em; }
+.brand { flex: none; display: inline-flex; align-items: center; gap: 8px; font-weight: 800; letter-spacing: .08em; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); transition: background .3s; }
 .dot.on { background: #3ddc84; box-shadow: 0 0 0 4px rgb(61 220 132 / .18); }
-.playlist { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.playlist { min-width: 0; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; width: 100%; max-width: 560px; }
 .card h1 { font-size: 22px; margin-bottom: 12px; }
@@ -79,31 +78,35 @@ button:disabled { opacity: .5; }
   background: rgb(255 196 0 / .1); border: 1px solid rgb(255 196 0 / .3); color: #ffd666; font-size: 14px;
 }
 
-/* ---- 今の曲 ---- */
+/* ---- 今の曲（ジャケ小さめの横並びで、1画面に収める） ---- */
 .now {
-  position: relative; display: grid; gap: 16px; padding: 8px 0 20px;
+  display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: center; gap: 14px;
+  padding: 14px; margin-bottom: 12px; border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface)); border: 1px solid var(--line);
 }
 .now .art {
-  width: min(72vw, 300px); aspect-ratio: 1; margin: 8px auto 0; border-radius: 22px; overflow: hidden;
-  background: var(--surface-2);
-  box-shadow: 0 24px 60px -16px color-mix(in srgb, var(--accent) 60%, transparent);
+  width: 96px; aspect-ratio: 1; border-radius: 14px; overflow: hidden; background: var(--surface-2);
+  box-shadow: 0 12px 32px -12px color-mix(in srgb, var(--accent) 70%, transparent);
   transition: box-shadow .6s;
 }
 .now .art img { width: 100%; height: 100%; object-fit: cover; }
 .now .art img:not([src]), .now .art img[src=""] { visibility: hidden; }
-.now-meta { text-align: center; }
+.now-meta { min-width: 0; }
 .label { font-size: 11px; letter-spacing: .18em; color: var(--accent); font-weight: 800; filter: brightness(1.4); }
-.now h1 { font-size: 24px; line-height: 1.3; margin-top: 4px; overflow-wrap: anywhere; }
-.artist { color: var(--muted); margin-top: 2px; }
-.req {
-  display: inline-block; margin-top: 12px; padding: 8px 14px; border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 22%, var(--surface)); font-size: 14px;
+.now h1 {
+  font-size: 19px; line-height: 1.3; margin-top: 2px; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.now.switching .art, .now.switching .now-meta { animation: swap .5s ease; }
-@keyframes swap { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+.artist { color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.req {
+  grid-column: 1 / -1; padding: 8px 12px; border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface)); font-size: 14px; overflow-wrap: anywhere;
+}
+.now.switching > * { animation: swap .5s ease; }
+@keyframes swap { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 body.guest::before {
   /* ジャケットの色をうっすら背景に敷く */
-  content: ""; position: fixed; inset: 0 0 auto; height: 70vh; z-index: -1; pointer-events: none;
+  content: ""; position: fixed; inset: 0 0 auto; height: 50vh; z-index: -1; pointer-events: none;
   background: radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--accent) 35%, transparent), transparent 70%);
   transition: background .6s;
 }
@@ -128,32 +131,19 @@ body.guest::before {
 .track .btns { display: flex; gap: 6px; }
 .icon-btn { width: 44px; min-height: 44px; padding: 0; border-radius: 12px; font-size: 20px; }
 
-/* ---- 下部の検索バー ---- */
-.searchbar {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-  display: flex; gap: 8px; padding: 12px var(--gutter) calc(12px + var(--safe-b));
-  background: color-mix(in srgb, var(--bg) 85%, transparent);
-  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  border-top: 1px solid var(--line);
-}
+/* ---- 検索（今の曲のすぐ下。結果はその下に出す） ---- */
+.searchbar { display: flex; gap: 8px; margin-bottom: 12px; }
 .searchbar input { flex: 1; min-width: 0; border-radius: 999px !important; }
 .searchbar button { border-radius: 999px; }
-@media (min-width: 600px) { .searchbar { padding-left: calc(50% - 280px + var(--gutter)); padding-right: calc(50% - 280px + var(--gutter)); } }
-
-/* ---- 検索結果のシート ---- */
-.sheet { position: fixed; inset: 0; z-index: 20; }
-.sheet[hidden] { display: none; }
-.sheet-backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / .5); animation: fade .2s; }
-.sheet-panel {
-  position: absolute; left: 0; right: 0; bottom: calc(var(--bar-h) + var(--safe-b));
-  max-width: 560px; margin: 0 auto; max-height: calc(100dvh - var(--bar-h) - var(--safe-b) - 48px); overflow-y: auto;
-  background: var(--surface); border: 1px solid var(--line); border-bottom: 0; border-radius: 22px 22px 0 0;
-  padding: 8px var(--gutter) 12px; animation: up .25s ease; overscroll-behavior: contain;
+.results {
+  margin-bottom: 16px; padding: 8px 14px 6px; border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--line); animation: fade .2s;
 }
-.sheet-head { position: sticky; top: -8px; display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding-top: 8px; font-weight: 800; }
+.results-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.results-head h2 { font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.results-head button { flex: none; }
 .hint { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
 .key { display: inline-grid; place-items: center; width: 22px; height: 22px; margin-right: 4px; border-radius: 6px; background: var(--surface-2); color: var(--text); }
-@keyframes up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes fade { from { opacity: 0; } }
 
 /* ---- メッセージ付き追加 ---- */
@@ -165,12 +155,13 @@ body.guest::before {
 .msg-dialog form { display: flex; flex-direction: column; gap: 14px; }
 .msg-track { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 12px; align-items: center; }
 .msg-track img { width: 56px; height: 56px; border-radius: 10px; }
+.msg-track .name { font-weight: 700; }
 .opt { margin-left: 6px; font-size: 11px; color: var(--muted); }
 .actions { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; }
 
 /* ---- トースト ---- */
 .toast {
-  position: fixed; left: 50%; bottom: calc(var(--bar-h) + var(--safe-b) + 16px); z-index: 40;
+  position: fixed; left: 50%; bottom: calc(var(--safe-b) + 24px); z-index: 40;
   transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
   max-width: calc(100% - 32px); padding: 12px 18px; border-radius: 999px;
   background: var(--text); color: var(--bg); font-weight: 700; font-size: 14px; text-align: center;

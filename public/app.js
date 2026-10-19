@@ -130,7 +130,7 @@ function render(state) {
 
   const list = $('next')
   list.replaceChildren(...state.next.map((t) => trackRow(t)))
-  if (state.next.length === 0) list.append(el('li', { class: 'empty', text: 'まだありません。下の検索から曲を追加できます' }))
+  if (state.next.length === 0) list.append(el('li', { class: 'empty', text: 'まだありません。上の検索から曲を追加できます' }))
 }
 
 let pollTimer
@@ -146,10 +146,14 @@ async function poll() {
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll() })
 
 // ---- 検索 ----
-const sheet = $('sheet')
-function openSheet() { sheet.hidden = false }
-function closeSheet() { sheet.hidden = true }
-sheet.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeSheet))
+const resultsBox = $('results-box')
+function openResults() { resultsBox.hidden = false }
+function closeResults() {
+  resultsBox.hidden = true
+  $('results').replaceChildren()
+  $('q').value = ''
+}
+$('results-close').addEventListener('click', closeResults)
 
 $('search-form').addEventListener('submit', async (e) => {
   e.preventDefault()
@@ -160,7 +164,7 @@ $('search-form').addEventListener('submit', async (e) => {
   const results = $('results')
   $('results-title').textContent = `「${q}」の検索結果`
   results.replaceChildren(el('li', { class: 'empty', text: '検索中…' }))
-  openSheet()
+  openResults()
   try {
     const res = await fetch(`${API}/search?q=${encodeURIComponent(q)}`)
     const { tracks, error } = await res.json()
@@ -187,8 +191,7 @@ async function add(t, nickname, comment, button) {
     const json = await res.json()
     if (!res.ok) throw new Error(json.error)
     toast(json.ahead === 0 ? `「${t.name}」を追加しました・次に流れます` : `「${t.name}」を追加しました・あと${json.ahead}曲のあとに流れます`)
-    closeSheet()
-    $('q').value = ''
+    closeResults()
     setTimeout(poll, 800)
   } catch (err) {
     toast(err.message || '追加できませんでした', true)
