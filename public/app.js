@@ -123,6 +123,7 @@ function render(state) {
     $('now-artist').textContent = c?.artist ?? ''
     applyAccent(c?.image)
   }
+  $('now').classList.toggle('playing', state.isPlaying)
   $('now-label').textContent = state.isPlaying ? 'NOW PLAYING' : 'PAUSED'
   const req = $('now-req')
   req.hidden = !c?.request

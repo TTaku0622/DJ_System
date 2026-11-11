@@ -84,13 +84,36 @@ button:disabled { opacity: .5; }
   padding: 14px; margin-bottom: 12px; border-radius: var(--radius);
   background: color-mix(in srgb, var(--accent) 14%, var(--surface)); border: 1px solid var(--line);
 }
+/* ジャケットをレコード（ピクチャーディスク）にして、再生中だけ回す */
 .now .art {
-  width: 96px; aspect-ratio: 1; border-radius: 14px; overflow: hidden; background: var(--surface-2);
+  position: relative; width: 96px; aspect-ratio: 1; border-radius: 50%;
   box-shadow: 0 12px 32px -12px color-mix(in srgb, var(--accent) 70%, transparent);
   transition: box-shadow .6s;
 }
-.now .art img { width: 100%; height: 100%; object-fit: cover; }
-.now .art img:not([src]), .now .art img[src=""] { visibility: hidden; }
+.disc {
+  position: absolute; inset: 0; border-radius: 50%; overflow: hidden;
+  background: #111; border: 3px solid #0a0a0a;
+  animation: spin 6s linear infinite; animation-play-state: paused;
+}
+.now.playing .disc { animation-play-state: running; }
+.disc img { width: 100%; height: 100%; object-fit: cover; }
+.disc img:not([src]), .disc img[src=""] { visibility: hidden; }
+.disc::before {
+  /* 溝 */
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background: repeating-radial-gradient(circle, rgb(0 0 0 / 0) 0 2px, rgb(0 0 0 / .18) 2px 3px);
+}
+.disc::after {
+  /* 中心の穴 */
+  content: ""; position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px;
+  border-radius: 50%; background: var(--bg); box-shadow: 0 0 0 4px rgb(0 0 0 / .55);
+}
+.now .art::after {
+  /* 光の反射（回さない） */
+  content: ""; position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+  background: conic-gradient(from 30deg, transparent 0 10%, rgb(255 255 255 / .16) 15%, transparent 22% 60%, rgb(255 255 255 / .1) 65%, transparent 72%);
+}
+@keyframes spin { to { transform: rotate(1turn); } }
 .now-meta { min-width: 0; }
 .label { font-size: 11px; letter-spacing: .18em; color: var(--accent); font-weight: 800; filter: brightness(1.4); }
 .now h1 {

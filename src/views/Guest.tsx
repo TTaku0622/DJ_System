@@ -14,7 +14,9 @@ export const GuestPage = (props: { session: Session }) => (
 
       <section class="now" id="now">
         <div class="art">
-          <img id="now-art" alt="" />
+          <div class="disc">
+            <img id="now-art" alt="" />
+          </div>
         </div>
         <div class="now-meta">
           <p class="label" id="now-label">NOW PLAYING</p>
