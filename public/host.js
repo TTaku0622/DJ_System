@@ -75,9 +75,9 @@ if (defaults) {
   async function add(t, button) {
     button.disabled = true
     try {
-      await call('/host/api/default', { uri: t.uri })
+      const { added } = await call('/host/api/default', { uri: t.uri })
       button.textContent = '✓'
-      status(`「${t.name}」を追加しました`)
+      status(added ? `「${t.name}」を追加しました` : `「${t.name}」はもう入っています`)
       load()
     } catch (err) {
       button.disabled = false
@@ -88,8 +88,7 @@ if (defaults) {
   async function remove(t, button) {
     button.disabled = true
     try {
-      // 同じ曲が複数入っていると全部外れる（Spotify の仕様）
-      await call('/host/api/default/remove', { uri: t.uri })
+      await call('/host/api/default/remove', { id: t.id })
       status(`「${t.name}」を外しました`)
       load()
     } catch (err) {

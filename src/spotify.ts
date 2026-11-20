@@ -168,9 +168,3 @@ export async function playlistTracks(env: Env, playlistId: string, max = 200): P
   }
   return tracks
 }
-
-// 2026-02 の変更で POST /users/{id}/playlists は /me/playlists になった
-export async function createPlaylist(env: Env, name: string): Promise<{ id: string; name: string }> {
-  const json = await api(env, 'POST', '/me/playlists', { name, public: false, description: 'DJ System のデフォルト曲' })
-  return { id: json.id, name: json.name }
-}

@@ -1,8 +1,8 @@
 import { Hono, type Context } from 'hono'
 import { deleteCookie, getCookie, getSignedCookie, setCookie, setSignedCookie } from 'hono/cookie'
 import qrcode from 'qrcode-generator'
-import { activeSession, addRequest, invalidatePlayback, playback, Session, startPlaylist, stateView, syncSession } from './player'
-import { api, authorizeUrl, createPlaylist, Env, exchangeCode, myPlaylists, playlistTracks, searchTracks, SpotifyError, tokenStatus } from './spotify'
+import { activeSession, addDefaultTracks, addRequest, defaultTracks, invalidatePlayback, playback, Session, startDefaults, stateView, syncSession } from './player'
+import { api, authorizeUrl, Env, exchangeCode, myPlaylists, playlistTracks, searchTracks, SpotifyError, toTrack, tokenStatus } from './spotify'
 import { GuestPage } from './views/Guest'
 import { HostPage } from './views/Host'
 import { MessagePage } from './views/Layout'
@@ -57,22 +57,17 @@ app.use('/host/*', async (c, next) => {
   return next()
 })
 
-// 共有中のセッションがなければ作る。デフォルト曲のプレイリストは前回のものを使い回し、初回だけ新しく作る
+// 共有中のセッションがなければ作る。設定（シャッフル・自動再開・タイトル）は前回のものを引き継ぐ
 async function ensureSession(env: Env): Promise<Session> {
   const active = await activeSession(env)
   if (active) return active
-  const last = await env.DB.prepare(
-    'SELECT playlist_id, playlist_name, shuffle, auto_resume, title FROM sessions ORDER BY created_at DESC LIMIT 1',
-  ).first<Pick<Session, 'playlist_id' | 'playlist_name' | 'shuffle' | 'auto_resume' | 'title'>>()
-  // Spotify の ID は英数字22文字。テスト用の仮の ID などは使わない
-  const reuse = last && /^[A-Za-z0-9]{22}$/.test(last.playlist_id)
-  const playlist = reuse
-    ? { id: last.playlist_id, name: last.playlist_name }
-    : await createPlaylist(env, 'DJ System のデフォルト曲')
+  const last = await env.DB.prepare('SELECT shuffle, auto_resume, title FROM sessions ORDER BY created_at DESC LIMIT 1')
+    .first<Pick<Session, 'shuffle' | 'auto_resume' | 'title'>>()
   const id = randomId(16)
+  // playlist_id / playlist_name は以前プレイリストを使っていたころの列。今は使わない
   await env.DB.prepare(
-    'INSERT INTO sessions (id, playlist_id, playlist_name, shuffle, auto_resume, title, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  ).bind(id, playlist.id, playlist.name, reuse ? last.shuffle : 0, reuse ? last.auto_resume : 1, last?.title ?? '', Date.now()).run()
+    `INSERT INTO sessions (id, playlist_id, playlist_name, shuffle, auto_resume, title, created_at) VALUES (?, '', '', ?, ?, ?, ?)`,
+  ).bind(id, last?.shuffle ?? 0, last?.auto_resume ?? 1, last?.title ?? '', Date.now()).run()
   return (await activeSession(env, id))!
 }
 
@@ -112,7 +107,7 @@ app.get('/host/spotify', (c) => {
   const state = randomId(16)
   // Spotify からの戻りはサイトをまたぐ遷移なので Lax にする
   setCookie(c, 'oauth_state', state, { httpOnly: true, sameSite: 'Lax', secure: isHttps(c), path: '/', maxAge: 600 })
-  return c.redirect(authorizeUrl(c.env, `${new URL(c.req.url).origin}/callback`, state))
+  return c.redirect(authorizeUrl(c.env, `${baseUrl(c)}/callback`, state))
 })
 
 app.get('/callback', async (c) => {
@@ -122,7 +117,8 @@ app.get('/callback', async (c) => {
   if (!state || state !== c.req.query('state') || !code) {
     return c.html(<MessagePage title="連携できませんでした" message="もう一度ホスト画面からやり直してください。" />, 400)
   }
-  await exchangeCode(c.env, code, `${new URL(c.req.url).origin}/callback`)
+  // 連携を始めたときと同じ戻り先を渡す（TryCloudflare 経由なら https://…trycloudflare.com/callback）
+  await exchangeCode(c.env, code, `${baseUrl(c)}/callback`)
   return c.redirect('/host?msg=' + encodeURIComponent('Spotify と連携しました'))
 })
 
@@ -133,10 +129,9 @@ app.post('/host/session/play', async (c) => {
   try {
     invalidatePlayback()
     const pb = await playback(c.env)
-    await startPlaylist(c.env, session, pb.deviceId ?? session.last_device_id)
-  } catch {
-    const empty = (await playlistTracks(c.env, session.playlist_id, 1).catch(() => [])).length === 0
-    msg = empty
+    await startDefaults(c.env, session, pb.deviceId ?? session.last_device_id)
+  } catch (e) {
+    msg = e instanceof Error && e.message === 'NO_DEFAULTS'
       ? 'デフォルト曲がまだありません。曲を追加してから押してください'
       : '再生できませんでした。Spotify アプリを開いてどれか1曲流してから、もう一度押してください'
   }
@@ -186,7 +181,7 @@ app.use('/host/api/*', async (c, next) => {
   return next()
 })
 
-app.get('/host/api/default', async (c) => c.json({ tracks: await playlistTracks(c.env, c.get('session').playlist_id) }))
+app.get('/host/api/default', async (c) => c.json({ tracks: await defaultTracks(c.env) }))
 
 app.get('/host/api/search', async (c) => {
   const q = (c.req.query('q') ?? '').trim().slice(0, 100)
@@ -197,39 +192,32 @@ app.get('/host/api/search', async (c) => {
 app.post('/host/api/default', async (c) => {
   const body = await c.req.json<{ uri?: unknown }>().catch(() => ({}) as { uri?: unknown })
   if (!isTrackUri(body.uri)) return c.json({ error: 'bad track' }, 400)
-  await api(c.env, 'POST', `/playlists/${c.get('session').playlist_id}/items`, { uris: [body.uri] })
-  return c.json({ ok: true })
+  // 曲名などは Spotify から取り直す（1曲ずつの取得は 2026-02 以降も使える）
+  const track = toTrack(await api(c.env, 'GET', `/tracks/${body.uri.split(':')[2]}?market=JP`))
+  if (!track) return c.json({ error: 'bad track' }, 400)
+  const added = await addDefaultTracks(c.env, [track])
+  return c.json({ added })
 })
 
-// まとめて入れる元のプレイリスト（デフォルト曲そのものは除く）
-app.get('/host/api/playlists', async (c) => {
-  const playlists = await myPlaylists(c.env)
-  return c.json({ playlists: playlists.filter((p) => p.id !== c.get('session').playlist_id) })
-})
+// まとめて入れる元のプレイリスト（読むだけで、Spotify 側は書き換えない）
+app.get('/host/api/playlists', async (c) => c.json({ playlists: await myPlaylists(c.env) }))
 
 // 選んだプレイリストの曲を、デフォルト曲の末尾にまとめて入れる。すでに入っている曲は飛ばす
 app.post('/host/api/default/import', async (c) => {
   const body = await c.req.json<{ playlistId?: unknown }>().catch(() => ({}) as { playlistId?: unknown })
   const from = body.playlistId
   if (typeof from !== 'string' || !/^[A-Za-z0-9]{22}$/.test(from)) return c.json({ error: 'bad playlist' }, 400)
-  const target = c.get('session').playlist_id
-  const [source, current] = await Promise.all([playlistTracks(c.env, from, 500), playlistTracks(c.env, target, 500)])
-  const have = new Set(current.map((t) => t.uri))
-  // ローカルファイルの曲（spotify:local:...）は他のプレイリストに入れられないので除く
-  const unique = [...new Set(source.map((t) => t.uri))].filter((u) => isTrackUri(u))
-  const uris = unique.filter((u) => !have.has(u))
-  // 1回に入れられるのは100曲まで
-  for (let i = 0; i < uris.length; i += 100) {
-    await api(c.env, 'POST', `/playlists/${target}/items`, { uris: uris.slice(i, i + 100) })
-  }
-  return c.json({ added: uris.length, skipped: unique.length - uris.length })
+  // ローカルファイルの曲（spotify:local:...）は Spotify から流せないので除く
+  const source = (await playlistTracks(c.env, from, 500)).filter((t) => isTrackUri(t.uri))
+  const unique = [...new Map(source.map((t) => [t.uri, t])).values()]
+  const added = await addDefaultTracks(c.env, unique)
+  return c.json({ added, skipped: unique.length - added })
 })
 
 app.post('/host/api/default/remove', async (c) => {
-  const body = await c.req.json<{ uri?: unknown }>().catch(() => ({}) as { uri?: unknown })
-  if (!isTrackUri(body.uri)) return c.json({ error: 'bad track' }, 400)
-  // 位置は指定できないので、同じ曲が複数入っているとすべて外れる
-  await api(c.env, 'DELETE', `/playlists/${c.get('session').playlist_id}/items`, { items: [{ uri: body.uri }] })
+  const body = await c.req.json<{ id?: unknown }>().catch(() => ({}) as { id?: unknown })
+  if (typeof body.id !== 'number') return c.json({ error: 'bad track' }, 400)
+  await c.env.DB.prepare('DELETE FROM default_tracks WHERE id = ?').bind(body.id).run()
   return c.json({ ok: true })
 })
 

@@ -81,16 +81,47 @@ export async function activeSession(env: Env, id?: string): Promise<Session | nu
   return (id ? stmt.bind(id) : stmt).first<Session>()
 }
 
-function playlistUri(session: Session) {
-  return `spotify:playlist:${session.playlist_id}`
+// ---- デフォルト曲（Spotify のプレイリストは使わず、アプリの中だけに持つ） ----
+
+export type DefaultTrack = Track & { id: number }
+
+type DefaultRow = { id: number; track_uri: string; track_name: string; artist: string; image_url: string; duration_ms: number }
+
+export async function defaultTracks(env: Env): Promise<DefaultTrack[]> {
+  const { results } = await env.DB.prepare('SELECT * FROM default_tracks ORDER BY id').all<DefaultRow>()
+  return results.map((r) => ({
+    id: r.id,
+    uri: r.track_uri,
+    name: r.track_name,
+    artist: r.artist,
+    image: r.image_url,
+    durationMs: r.duration_ms,
+  }))
 }
 
-// デフォルト曲（紐付けプレイリスト）を最初から流す
-export async function startPlaylist(env: Env, session: Session, deviceId: string | null) {
+// 末尾に足す。すでに入っている曲は飛ばし、実際に入った曲数を返す
+export async function addDefaultTracks(env: Env, tracks: Track[]): Promise<number> {
+  if (tracks.length === 0) return 0
+  const now = Date.now()
+  const stmt = env.DB.prepare(
+    `INSERT OR IGNORE INTO default_tracks (track_uri, track_name, artist, image_url, duration_ms, added_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  )
+  const results = await env.DB.batch(tracks.map((t) => stmt.bind(t.uri, t.name, t.artist, t.image, t.durationMs, now)))
+  return results.reduce((n, r) => n + (r.meta.changes ?? 0), 0)
+}
+
+// Spotify に曲をまとめて直接指定して流す。多すぎると失敗するので先頭から500曲まで
+const MAX_PLAY = 500
+
+// デフォルト曲を最初から流す
+export async function startDefaults(env: Env, session: Session, deviceId: string | null) {
+  const uris = (await defaultTracks(env)).slice(0, MAX_PLAY).map((t) => t.uri)
+  if (uris.length === 0) throw new Error('NO_DEFAULTS')
   const device = deviceId ? `device_id=${encodeURIComponent(deviceId)}` : ''
   const shuffle = `/me/player/shuffle?state=${session.shuffle ? 'true' : 'false'}${device ? `&${device}` : ''}`
   const shuffleSet = await api(env, 'PUT', shuffle).then(() => true, () => false)
-  await api(env, 'PUT', `/me/player/play${device ? `?${device}` : ''}`, { context_uri: playlistUri(session) })
+  await api(env, 'PUT', `/me/player/play${device ? `?${device}` : ''}`, { uris })
   // 再生前は端末が止まっていてシャッフル設定に失敗することがあるので、再生後にもう一度
   if (!shuffleSet) await api(env, 'PUT', shuffle).catch(() => {})
   invalidatePlayback()
@@ -119,11 +150,11 @@ export async function syncSession(env: Env, session: Session, pb: Playback) {
   if (!session.auto_resume || !session.last_seen_playing_at) return
   // 10分以上止まっているなら、ホストが止めたものとみなして触らない
   if (now - session.last_seen_playing_at > 10 * 60_000) return
-  // 曲の途中で止まっている＝一時停止。曲の終わり・曲がない状態＝プレイリストを流し終えた
+  // 曲の途中で止まっている＝一時停止。曲の終わり・曲がない状態＝デフォルト曲を流し終えた
   const finished = !pb.current || pb.progressMs === 0 || pb.current.durationMs - pb.progressMs < 3000
   if (!finished) return
 
-  await startPlaylist(env, session, pb.deviceId ?? session.last_device_id).catch((e) => console.error('auto resume failed', e))
+  await startDefaults(env, session, pb.deviceId ?? session.last_device_id).catch((e) => console.error('auto resume failed', e))
 }
 
 export async function addRequest(
@@ -190,7 +221,8 @@ export async function stateView(env: Env, session: Session): Promise<StateView> 
 
   let notice: string | null = null
   if (!pb.deviceId) notice = 'ホストの端末で Spotify が開かれていません'
-  else if (pb.contextUri && pb.contextUri !== playlistUri(session)) notice = `「${session.playlist_name}」以外を再生中です`
+  // デフォルト曲は曲を直接指定して流すので context が無い。context があるならアルバムなど別のものを流している
+  else if (pb.contextUri) notice = 'デフォルト曲以外（アルバムやプレイリスト）を再生中です'
 
   return { isPlaying: pb.isPlaying, current, next, repeat: pb.repeat, title: session.title, notice }
 }

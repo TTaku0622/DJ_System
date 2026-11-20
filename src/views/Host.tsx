@@ -79,7 +79,7 @@ export const HostPage = (p: HostProps) => (
                 <h2>デフォルト曲</h2>
                 <span class="muted" id="default-count"></span>
               </div>
-              <p class="muted">リクエストがないときに流れる曲です。検索して追加し、準備ができたら流してください。</p>
+              <p class="muted">リクエストがないときに流れる曲です。検索して追加し、準備ができたら流してください。流している途中で足した曲は、次に「最初から流す」を押したとき（または自動再開のとき）から入ります。</p>
               <form class="searchbar" id="default-search" role="search">
                 <input type="search" id="dq" placeholder="追加する曲を検索" enterkeyhint="search" autocomplete="off" />
                 <button type="submit" class="primary">検索</button>
@@ -101,7 +101,7 @@ export const HostPage = (p: HostProps) => (
                     <path d="m6 9 6 6 6-6" />
                   </svg>
                 </summary>
-                <p class="muted">選んだプレイリストの曲をデフォルト曲の最後に入れます。すでに入っている曲は飛ばします。</p>
+                <p class="muted">選んだプレイリストの曲をデフォルト曲の最後に入れます。すでに入っている曲は飛ばします。プレイリストのほうは書き換えません。</p>
                 <ul id="import-list" class="tracks">
                   <li class="empty">読み込み中…</li>
                 </ul>
