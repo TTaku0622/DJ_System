@@ -220,4 +220,42 @@ body.host .app { padding-bottom: 32px; }
 .message { text-align: center; }
 .message p { color: var(--muted); }
 
+/* ---- PC（幅が広い画面）: スマホの見た目はそのままで、2列に並べる ---- */
+@media (min-width: 900px) {
+  .app { max-width: 1120px; padding: 0 32px; }
+  .topbar { padding: 24px 0 20px; }
+  .brand { font-size: 18px; }
+  .playlist { font-size: 15px; }
+
+  /* ゲスト: 左に今の曲（スクロールしても見える）、右に検索・検索結果・次の曲 */
+  .guest-layout { display: grid; grid-template-columns: minmax(320px, 400px) minmax(0, 1fr); gap: 40px; align-items: start; }
+  body.guest .now {
+    position: sticky; top: 24px; grid-template-columns: 1fr; justify-items: center; text-align: center;
+    gap: 20px; padding: 32px 28px; margin: 0;
+  }
+  body.guest .now .art { width: min(100%, 280px); }
+  body.guest .now .disc::after { width: 28px; height: 28px; margin: -14px 0 0 -14px; box-shadow: 0 0 0 8px rgb(0 0 0 / .55); }
+  body.guest .now h1 { font-size: 26px; -webkit-line-clamp: 3; }
+  body.guest .artist { font-size: 16px; white-space: normal; }
+  body.guest .req { justify-content: center; width: 100%; }
+  body.guest .notice { margin-top: 0; }
+  body.guest .upnext h2 { font-size: 14px; margin-top: 8px; }
+  body.guest .track { padding: 10px 4px; }
+  body.guest .track img, body.guest .track .noart { width: 56px; height: 56px; }
+  body.guest .track { grid-template-columns: 56px minmax(0, 1fr) auto; }
+  body.guest .app { padding-bottom: 48px; }
+
+  /* ホスト: 左に共有（QR）と設定、右にデフォルト曲 */
+  .host-layout {
+    display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); grid-template-rows: auto 1fr;
+    grid-template-areas: "share defaults" "settings defaults"; gap: 0 24px; align-items: start;
+  }
+  .host-layout .card { max-width: none; }
+  .host-layout .share { grid-area: share; }
+  .host-layout .settings { grid-area: settings; }
+  .host-layout .defaults { grid-area: defaults; }
+  .host-layout .default-list { max-height: calc(100vh - 360px); }
+  .host .notice { max-width: none; }
+}
+
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

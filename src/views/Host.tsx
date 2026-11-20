@@ -49,7 +49,7 @@ export const HostPage = (p: HostProps) => (
         </section>
       ) : (
         p.session && (
-          <>
+          <div class="host-layout">
             <section class="card stack share">
               <h2>共有</h2>
               <form method="post" action="/host/session/title" class="title-form">
@@ -74,7 +74,7 @@ export const HostPage = (p: HostProps) => (
               </a>
             </section>
 
-            <section class="card stack" id="defaults">
+            <section class="card stack defaults" id="defaults">
               <div class="card-head">
                 <h2>デフォルト曲</h2>
                 <span class="muted" id="default-count"></span>
@@ -115,7 +115,7 @@ export const HostPage = (p: HostProps) => (
               </form>
             </section>
 
-            <section class="card stack">
+            <section class="card stack settings">
               <h2>設定</h2>
               <Toggle
                 action="/host/session/shuffle"
@@ -140,7 +140,7 @@ export const HostPage = (p: HostProps) => (
                 Spotify と連携し直す
               </a>
             </section>
-          </>
+          </div>
         )
       )}
     </main>

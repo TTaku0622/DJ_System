@@ -14,6 +14,8 @@ export const GuestPage = (props: { session: Session }) => (
         </span>
       </header>
 
+      {/* PC では左に今の曲、右に検索と次の曲。スマホでは上から順に並ぶだけ */}
+      <div class="guest-layout">
       <section class="now" id="now">
         <div class="art">
           <div class="disc">
@@ -34,6 +36,7 @@ export const GuestPage = (props: { session: Session }) => (
         </p>
       </section>
 
+      <div class="guest-main">
       <p class="notice" id="notice" hidden></p>
 
       <form class="searchbar" id="search-form" role="search">
@@ -56,6 +59,8 @@ export const GuestPage = (props: { session: Session }) => (
         <h2 id="next-title">次に流れる曲</h2>
         <ol id="next" class="tracks"></ol>
       </section>
+      </div>
+      </div>
     </main>
 
     <dialog id="msg-dialog" class="msg-dialog">
