@@ -107,6 +107,8 @@ function trackRow(t, extra) {
 
 function render(state) {
   $('live-dot').classList.toggle('on', state.isPlaying)
+  // ホストがタイトルを変えたら、開いたままの画面にも反映する
+  $('session-title').textContent = state.title
   const notice = $('notice')
   notice.hidden = !state.notice
   notice.textContent = state.notice ?? ''
@@ -125,13 +127,15 @@ function render(state) {
   }
   $('now').classList.toggle('playing', state.isPlaying)
   $('now-label').textContent = state.isPlaying ? 'NOW PLAYING' : 'PAUSED'
-  const req = $('now-req')
-  req.hidden = !c?.request
-  req.textContent = c?.request ? `🎧 ${requestLabel(c.request)}` : ''
+  $('now-req').hidden = !c?.request
+  $('now-req-text').textContent = c?.request ? requestLabel(c.request) : ''
 
   const list = $('next')
   list.replaceChildren(...state.next.map((t) => trackRow(t)))
-  if (state.next.length === 0) list.append(el('li', { class: 'empty', text: 'まだありません。上の検索から曲を追加できます' }))
+  if (state.next.length === 0) {
+    const text = state.repeat === 'track' ? 'この曲をくり返し再生中です' : 'まだありません。上の検索から曲を追加できます'
+    list.append(el('li', { class: 'empty', text }))
+  }
 }
 
 let pollTimer

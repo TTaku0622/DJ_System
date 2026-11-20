@@ -3,13 +3,15 @@ import { Layout } from './Layout'
 
 // ゲスト画面。中身は public/app.js がポーリングで埋める
 export const GuestPage = (props: { session: Session }) => (
-  <Layout title={`DJ · ${props.session.playlist_name}`} bodyClass="guest">
+  <Layout title={props.session.title ? `DJ System · ${props.session.title}` : 'DJ System'} bodyClass="guest">
     <main class="app" data-session={props.session.id}>
       <header class="topbar">
         <span class="brand">
           <span class="dot" id="live-dot"></span>DJ System
         </span>
-        <span class="playlist">{props.session.playlist_name}</span>
+        <span class="playlist" id="session-title">
+          {props.session.title}
+        </span>
       </header>
 
       <section class="now" id="now">
@@ -23,7 +25,13 @@ export const GuestPage = (props: { session: Session }) => (
           <h1 id="now-title">読み込み中…</h1>
           <p class="artist" id="now-artist"></p>
         </div>
-        <p class="req" id="now-req" hidden></p>
+        <p class="req" id="now-req" hidden>
+          {/* Lucide の headphones（線アイコン） */}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3" />
+          </svg>
+          <span id="now-req-text"></span>
+        </p>
       </section>
 
       <p class="notice" id="notice" hidden></p>
@@ -45,7 +53,7 @@ export const GuestPage = (props: { session: Session }) => (
       </section>
 
       <section class="upnext">
-        <h2>次に流れる曲</h2>
+        <h2 id="next-title">次に流れる曲</h2>
         <ol id="next" class="tracks"></ol>
       </section>
     </main>

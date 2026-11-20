@@ -5,6 +5,7 @@ export type Session = {
   id: string
   playlist_id: string
   playlist_name: string
+  title: string
   shuffle: number
   auto_resume: number
   last_seen_playing_at: number | null
@@ -22,6 +23,7 @@ export type Playback = {
   deviceId: string | null
   contextUri: string | null
   shuffle: boolean
+  repeat: 'off' | 'context' | 'track'
 }
 
 type RequestRow = {
@@ -49,14 +51,23 @@ export async function playback(env: Env): Promise<Playback> {
     // 再生端末がないときは失敗するので空扱い
     api(env, 'GET', '/me/player/queue').catch(() => null),
   ])
+  const current = toTrack(state?.item)
+  const repeat: Playback['repeat'] = state?.repeat_state === 'context' || state?.repeat_state === 'track' ? state.repeat_state : 'off'
+  let next: Track[] = (queue?.queue ?? []).map(toTrack).filter((t: Track | null): t is Track => t !== null)
+  if (repeat !== 'off') {
+    // ループ中の Spotify は同じ曲をくり返し並べて返すので、1曲1回だけにする。1曲リピートなら今の曲は並べない
+    const seen = new Set(repeat === 'track' && current ? [current.uri] : [])
+    next = next.filter((t) => !seen.has(t.uri) && seen.add(t.uri))
+  }
   const value: Playback = {
     isPlaying: Boolean(state?.is_playing),
     progressMs: state?.progress_ms ?? 0,
-    current: toTrack(state?.item),
-    next: (queue?.queue ?? []).map(toTrack).filter((t: Track | null): t is Track => t !== null),
+    current,
+    next,
     deviceId: state?.device?.id ?? null,
     contextUri: state?.context?.uri ?? null,
     shuffle: Boolean(state?.shuffle_state),
+    repeat,
   }
   cache = { at: Date.now(), value }
   return value
@@ -120,11 +131,9 @@ export async function addRequest(
   session: Session,
   input: { uri: string; name: string; artist: string; image: string; nickname: string | null; comment: string | null },
 ): Promise<{ ahead: number }> {
-  // キューに入れれば、今の曲の後にリクエスト順で必ず流れる（失敗したらプレイリストにも入れない）
+  // キューに入れれば、今の曲の後にリクエスト順で必ず流れる。
+  // デフォルト曲（プレイリスト）はホストが選んだ曲だけにするので、リクエストはそこに入れない
   await api(env, 'POST', `/me/player/queue?uri=${encodeURIComponent(input.uri)}`)
-  // 記録用にプレイリスト末尾へ。失敗しても再生には影響しないのでログだけ残す
-  await api(env, 'POST', `/playlists/${session.playlist_id}/items`, { uris: [input.uri] })
-    .catch((e) => console.error('playlist append failed', e))
 
   const pending = await env.DB.prepare('SELECT COUNT(*) AS n FROM requests WHERE session_id = ? AND played_at IS NULL')
     .bind(session.id).first<{ n: number }>()
@@ -140,6 +149,8 @@ export type StateView = {
   isPlaying: boolean
   current: (Track & { request: RequestInfo | null }) | null
   next: (Track & { request: RequestInfo | null })[]
+  repeat: Playback['repeat']
+  title: string
   notice: string | null
 }
 
@@ -150,7 +161,7 @@ export async function stateView(env: Env, session: Session): Promise<StateView> 
     pb = await playback(env)
   } catch (e) {
     if (e instanceof SpotifyError && e.reason === 'NOT_CONNECTED') {
-      return { isPlaying: false, current: null, next: [], notice: 'ホストの Spotify 連携が切れています' }
+      return { isPlaying: false, current: null, next: [], repeat: 'off', title: session.title, notice: 'ホストの Spotify 連携が切れています' }
     }
     throw e
   }
@@ -181,5 +192,5 @@ export async function stateView(env: Env, session: Session): Promise<StateView> 
   if (!pb.deviceId) notice = 'ホストの端末で Spotify が開かれていません'
   else if (pb.contextUri && pb.contextUri !== playlistUri(session)) notice = `「${session.playlist_name}」以外を再生中です`
 
-  return { isPlaying: pb.isPlaying, current, next, notice }
+  return { isPlaying: pb.isPlaying, current, next, repeat: pb.repeat, title: session.title, notice }
 }

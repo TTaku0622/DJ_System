@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono'
 import { deleteCookie, getCookie, getSignedCookie, setCookie, setSignedCookie } from 'hono/cookie'
 import qrcode from 'qrcode-generator'
 import { activeSession, addRequest, invalidatePlayback, playback, Session, startPlaylist, stateView, syncSession } from './player'
-import { authorizeUrl, Env, exchangeCode, myPlaylists, searchTracks, SpotifyError, tokenStatus } from './spotify'
+import { api, authorizeUrl, createPlaylist, Env, exchangeCode, myPlaylists, playlistTracks, searchTracks, SpotifyError, tokenStatus } from './spotify'
 import { GuestPage } from './views/Guest'
 import { HostPage } from './views/Host'
 import { MessagePage } from './views/Layout'
@@ -25,6 +25,8 @@ const baseUrl = (c: Context<AppEnv>) => {
 }
 
 const isHttps = (c: Context) => new URL(c.req.url).protocol === 'https:'
+
+const isTrackUri = (v: unknown): v is string => typeof v === 'string' && /^spotify:track:[A-Za-z0-9]{22}$/.test(v)
 
 // ---- ホスト ----
 
@@ -55,15 +57,33 @@ app.use('/host/*', async (c, next) => {
   return next()
 })
 
+// 共有中のセッションがなければ作る。デフォルト曲のプレイリストは前回のものを使い回し、初回だけ新しく作る
+async function ensureSession(env: Env): Promise<Session> {
+  const active = await activeSession(env)
+  if (active) return active
+  const last = await env.DB.prepare(
+    'SELECT playlist_id, playlist_name, shuffle, auto_resume, title FROM sessions ORDER BY created_at DESC LIMIT 1',
+  ).first<Pick<Session, 'playlist_id' | 'playlist_name' | 'shuffle' | 'auto_resume' | 'title'>>()
+  // Spotify の ID は英数字22文字。テスト用の仮の ID などは使わない
+  const reuse = last && /^[A-Za-z0-9]{22}$/.test(last.playlist_id)
+  const playlist = reuse
+    ? { id: last.playlist_id, name: last.playlist_name }
+    : await createPlaylist(env, 'DJ System のデフォルト曲')
+  const id = randomId(16)
+  await env.DB.prepare(
+    'INSERT INTO sessions (id, playlist_id, playlist_name, shuffle, auto_resume, title, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  ).bind(id, playlist.id, playlist.name, reuse ? last.shuffle : 0, reuse ? last.auto_resume : 1, last?.title ?? '', Date.now()).run()
+  return (await activeSession(env, id))!
+}
+
 app.get('/host', async (c) => {
   const status = await tokenStatus(c.env)
-  const session = await activeSession(c.env)
-  let playlists: Awaited<ReturnType<typeof myPlaylists>> = []
   let message = c.req.query('msg') ?? null
+  let session: Session | null = null
   if (status.connected) {
-    playlists = await myPlaylists(c.env).catch((e) => {
-      message = `プレイリストを取得できませんでした（${e.message}）`
-      return []
+    session = await ensureSession(c.env).catch((e) => {
+      message = `準備できませんでした（${e.message}）`
+      return null
     })
   }
   let shareUrl: string | null = null
@@ -75,7 +95,7 @@ app.get('/host', async (c) => {
     qr.make()
     qrSvg = qr.createSvgTag({ cellSize: 8, margin: 2, scalable: true })
   }
-  const latest = await tokenStatus(c.env) // プレイリスト取得中に失効が分かった場合に反映
+  const latest = await tokenStatus(c.env) // 準備中に連携切れが分かった場合に反映
   return c.html(
     <HostPage
       connected={latest.connected}
@@ -83,7 +103,6 @@ app.get('/host', async (c) => {
       session={session}
       shareUrl={shareUrl}
       qrSvg={qrSvg}
-      playlists={playlists}
       message={message}
     />,
   )
@@ -107,29 +126,6 @@ app.get('/callback', async (c) => {
   return c.redirect('/host?msg=' + encodeURIComponent('Spotify と連携しました'))
 })
 
-app.post('/host/session', async (c) => {
-  const form = await c.req.formData()
-  const [playlistId, playlistName] = String(form.get('playlist') ?? '').split('\t')
-  if (!playlistId) return c.redirect('/host')
-  const now = Date.now()
-  // 同時に有効なのは1つだけ。古い URL は無効になる
-  await c.env.DB.prepare('UPDATE sessions SET ended_at = ? WHERE ended_at IS NULL').bind(now).run()
-  const id = randomId(16)
-  await c.env.DB.prepare(
-    'INSERT INTO sessions (id, playlist_id, playlist_name, shuffle, created_at) VALUES (?, ?, ?, ?, ?)',
-  ).bind(id, playlistId, playlistName || 'プレイリスト', form.get('shuffle') ? 1 : 0, now).run()
-
-  const session = (await activeSession(c.env, id))!
-  let msg = 'セッションを始めました'
-  try {
-    const pb = await playback(c.env)
-    await startPlaylist(c.env, session, pb.deviceId)
-  } catch (e) {
-    msg = 'セッションを始めました。再生は開始できなかったので、Spotify アプリでどれか1曲流してから「デフォルト曲を最初から流す」を押してください'
-  }
-  return c.redirect('/host?msg=' + encodeURIComponent(msg))
-})
-
 app.post('/host/session/play', async (c) => {
   const session = await activeSession(c.env)
   if (!session) return c.redirect('/host')
@@ -139,7 +135,10 @@ app.post('/host/session/play', async (c) => {
     const pb = await playback(c.env)
     await startPlaylist(c.env, session, pb.deviceId ?? session.last_device_id)
   } catch {
-    msg = '再生できませんでした。Spotify アプリを開いてどれか1曲流してから、もう一度押してください'
+    const empty = (await playlistTracks(c.env, session.playlist_id, 1).catch(() => [])).length === 0
+    msg = empty
+      ? 'デフォルト曲がまだありません。曲を追加してから押してください'
+      : '再生できませんでした。Spotify アプリを開いてどれか1曲流してから、もう一度押してください'
   }
   return c.redirect('/host?msg=' + encodeURIComponent(msg))
 })
@@ -151,9 +150,87 @@ app.post('/host/session/auto-resume', async (c) => {
   return c.redirect('/host')
 })
 
-app.post('/host/session/end', async (c) => {
+app.post('/host/session/shuffle', async (c) => {
+  const form = await c.req.formData()
+  const on = form.get('value') === '1'
+  await c.env.DB.prepare('UPDATE sessions SET shuffle = ? WHERE ended_at IS NULL').bind(on ? 1 : 0).run()
+  // 再生中ならすぐ反映する。端末がなければ次に流すときに反映される
+  await api(c.env, 'PUT', `/me/player/shuffle?state=${on}`).catch(() => {})
+  invalidatePlayback()
+  return c.redirect('/host')
+})
+
+app.post('/host/session/title', async (c) => {
+  const form = await c.req.formData()
+  const title = String(form.get('title') ?? '').trim().slice(0, 30)
+  await c.env.DB.prepare('UPDATE sessions SET title = ? WHERE ended_at IS NULL').bind(title).run()
+  return c.redirect('/host?msg=' + encodeURIComponent(title ? `タイトルを「${title}」にしました` : 'タイトルを消しました'))
+})
+
+// 今の URL を無効にして新しい URL にする（デフォルト曲はそのまま）
+app.post('/host/session/renew', async (c) => {
   await c.env.DB.prepare('UPDATE sessions SET ended_at = ? WHERE ended_at IS NULL').bind(Date.now()).run()
-  return c.redirect('/host?msg=' + encodeURIComponent('セッションを終了しました'))
+  return c.redirect('/host?msg=' + encodeURIComponent('新しい URL にしました。前の URL は使えません'))
+})
+
+// ---- ホスト: デフォルト曲（紐付けプレイリストの中身）の編集 ----
+
+app.use('/host/api/*', async (c, next) => {
+  // JSON 以外は受け付けない（よそのサイトのフォームから勝手に書き換えさせないため）
+  if (c.req.method === 'POST' && !c.req.header('content-type')?.startsWith('application/json')) {
+    return c.json({ error: 'bad request' }, 400)
+  }
+  const session = await activeSession(c.env)
+  if (!session) return c.json({ error: 'セッションがありません' }, 404)
+  c.set('session', session)
+  return next()
+})
+
+app.get('/host/api/default', async (c) => c.json({ tracks: await playlistTracks(c.env, c.get('session').playlist_id) }))
+
+app.get('/host/api/search', async (c) => {
+  const q = (c.req.query('q') ?? '').trim().slice(0, 100)
+  if (!q) return c.json({ tracks: [] })
+  return c.json({ tracks: await searchTracks(c.env, q) })
+})
+
+app.post('/host/api/default', async (c) => {
+  const body = await c.req.json<{ uri?: unknown }>().catch(() => ({}) as { uri?: unknown })
+  if (!isTrackUri(body.uri)) return c.json({ error: 'bad track' }, 400)
+  await api(c.env, 'POST', `/playlists/${c.get('session').playlist_id}/items`, { uris: [body.uri] })
+  return c.json({ ok: true })
+})
+
+// まとめて入れる元のプレイリスト（デフォルト曲そのものは除く）
+app.get('/host/api/playlists', async (c) => {
+  const playlists = await myPlaylists(c.env)
+  return c.json({ playlists: playlists.filter((p) => p.id !== c.get('session').playlist_id) })
+})
+
+// 選んだプレイリストの曲を、デフォルト曲の末尾にまとめて入れる。すでに入っている曲は飛ばす
+app.post('/host/api/default/import', async (c) => {
+  const body = await c.req.json<{ playlistId?: unknown }>().catch(() => ({}) as { playlistId?: unknown })
+  const from = body.playlistId
+  if (typeof from !== 'string' || !/^[A-Za-z0-9]{22}$/.test(from)) return c.json({ error: 'bad playlist' }, 400)
+  const target = c.get('session').playlist_id
+  const [source, current] = await Promise.all([playlistTracks(c.env, from, 500), playlistTracks(c.env, target, 500)])
+  const have = new Set(current.map((t) => t.uri))
+  // ローカルファイルの曲（spotify:local:...）は他のプレイリストに入れられないので除く
+  const unique = [...new Set(source.map((t) => t.uri))].filter((u) => isTrackUri(u))
+  const uris = unique.filter((u) => !have.has(u))
+  // 1回に入れられるのは100曲まで
+  for (let i = 0; i < uris.length; i += 100) {
+    await api(c.env, 'POST', `/playlists/${target}/items`, { uris: uris.slice(i, i + 100) })
+  }
+  return c.json({ added: uris.length, skipped: unique.length - uris.length })
+})
+
+app.post('/host/api/default/remove', async (c) => {
+  const body = await c.req.json<{ uri?: unknown }>().catch(() => ({}) as { uri?: unknown })
+  if (!isTrackUri(body.uri)) return c.json({ error: 'bad track' }, 400)
+  // 位置は指定できないので、同じ曲が複数入っているとすべて外れる
+  await api(c.env, 'DELETE', `/playlists/${c.get('session').playlist_id}/items`, { items: [{ uri: body.uri }] })
+  return c.json({ ok: true })
 })
 
 // ---- ゲスト ----
@@ -188,8 +265,8 @@ app.post('/api/s/:id/requests', async (c) => {
   // JSON 以外は受け付けない（よそのサイトのフォームから勝手に追加させないため）
   if (!c.req.header('content-type')?.startsWith('application/json')) return c.json({ error: 'bad request' }, 400)
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>)
-  const uri = String(body.uri ?? '')
-  if (!/^spotify:track:[A-Za-z0-9]{22}$/.test(uri)) return c.json({ error: 'bad track' }, 400)
+  const uri = body.uri
+  if (!isTrackUri(uri)) return c.json({ error: 'bad track' }, 400)
   try {
     const result = await addRequest(c.env, c.get('session'), {
       uri,
@@ -211,7 +288,11 @@ app.post('/api/s/:id/requests', async (c) => {
 app.onError((e, c) => {
   console.error(e)
   if (e instanceof SpotifyError && e.status === 429) return c.json({ error: '混み合っています。少し待ってください' }, 429)
-  if (c.req.path.startsWith('/api/')) return c.json({ error: 'エラーが起きました' }, 500)
+  // ホスト画面には原因が分かるよう Spotify の理由も出す
+  if (c.req.path.startsWith('/host/api/') && e instanceof SpotifyError) {
+    return c.json({ error: `Spotify でエラーが起きました（${e.status} ${e.reason}）` }, 500)
+  }
+  if (c.req.path.startsWith('/api/') || c.req.path.startsWith('/host/api/')) return c.json({ error: 'エラーが起きました' }, 500)
   return c.html(<MessagePage title="エラー" message={e.message} />, 500)
 })
 

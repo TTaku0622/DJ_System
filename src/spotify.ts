@@ -99,7 +99,8 @@ export async function api<T = any>(env: Env, method: string, path: string, body?
   const token = await accessToken(env)
   const res = await fetch(API + path, {
     method,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    // ja を付けると曲名・アーティスト名が日本語表記で返る（付けないと「Kenshi Yonezu」など）
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept-Language': 'ja' },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (!res.ok) {
@@ -110,9 +111,13 @@ export async function api<T = any>(env: Env, method: string, path: string, body?
     } catch {}
     throw new SpotifyError(res.status, reason)
   }
-  // 再生操作系は 200/204 で本文が空のことがある
+  // 再生操作系は本文が空か、JSON でない文字列のことがある（キュー追加は ID のような文字列が返る）
   const text = await res.text()
-  return text ? (JSON.parse(text) as T) : null
+  try {
+    return text ? (JSON.parse(text) as T) : null
+  } catch {
+    return null
+  }
 }
 
 export function toTrack(item: any): Track | null {
@@ -128,8 +133,8 @@ export function toTrack(item: any): Track | null {
 }
 
 export async function searchTracks(env: Env, q: string): Promise<Track[]> {
-  // 2026-02 の変更で limit の上限は10
-  const params = new URLSearchParams({ q, type: 'track', limit: '10', market: 'from_token' })
+  // 2026-02 の変更で limit の上限は10。market=from_token は user-read-private の許可が要る（無いと 403）ので日本に固定する
+  const params = new URLSearchParams({ q, type: 'track', limit: '10', market: 'JP' })
   const json = await api(env, 'GET', `/search?${params}`)
   return (json?.tracks?.items ?? []).map(toTrack).filter((t: Track | null): t is Track => t !== null)
 }
@@ -148,4 +153,24 @@ export async function myPlaylists(env: Env): Promise<Playlist[]> {
       image: p.images?.at(-1)?.url ?? '',
       total: p.items?.total ?? p.tracks?.total ?? 0,
     }))
+}
+
+// プレイリストの中身。2026-02 の変更で1回50件まで、各要素の曲は item（旧 track）に入る
+export async function playlistTracks(env: Env, playlistId: string, max = 200): Promise<Track[]> {
+  const tracks: Track[] = []
+  for (let offset = 0; offset < max; offset += 50) {
+    const json = await api(env, 'GET', `/playlists/${playlistId}/items?limit=50&offset=${offset}&market=JP`)
+    for (const it of json?.items ?? []) {
+      const t = toTrack(it?.item ?? it?.track)
+      if (t) tracks.push(t)
+    }
+    if (!json?.next) break
+  }
+  return tracks
+}
+
+// 2026-02 の変更で POST /users/{id}/playlists は /me/playlists になった
+export async function createPlaylist(env: Env, name: string): Promise<{ id: string; name: string }> {
+  const json = await api(env, 'POST', '/me/playlists', { name, public: false, description: 'DJ System のデフォルト曲' })
+  return { id: json.id, name: json.name }
 }
