@@ -98,7 +98,7 @@ function trackRow(t, extra) {
   return el('li', { class: 'track' },
     art(t.image),
     el('div', { class: 't' },
-      el('div', { class: 'name' }, t.request ? el('span', { class: 'badge', text: 'REQ' }) : null, t.name),
+      el('div', { class: 'name', text: t.name }),
       el('div', { class: 'sub', text: t.request ? `${t.artist} · ${requestLabel(t.request)}` : t.artist }),
     ),
     extra ?? el('span'),

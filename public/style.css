@@ -147,10 +147,6 @@ body.guest::before {
 .track .t { min-width: 0; }
 .track .name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .track .sub { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.badge {
-  display: inline-block; margin-right: 6px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 800;
-  background: var(--accent); color: var(--accent-ink); vertical-align: 1px;
-}
 .empty { color: var(--muted); font-size: 14px; padding: 16px 0; }
 .track .btns { display: flex; gap: 6px; }
 .icon-btn { width: 44px; min-height: 44px; padding: 0; border-radius: 12px; font-size: 20px; }
