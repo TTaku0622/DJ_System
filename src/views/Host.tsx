@@ -29,11 +29,11 @@ const Toggle = (p: { action: string; on: boolean; label: string; note: string })
 )
 
 export const HostPage = (p: HostProps) => (
-  <Layout title="ホスト" bodyClass="host">
+  <Layout title="DJ Host" bodyClass="host">
     <main class="app">
       <header class="topbar">
         <span class="brand">
-          <span class="dot on"></span>DJ ホスト
+          <span class="dot on"></span>DJ Host
         </span>
       </header>
 
@@ -50,15 +50,19 @@ export const HostPage = (p: HostProps) => (
       ) : (
         p.session && (
           <div class="host-layout">
+            <section class="card stack title-card">
+              <h2>
+                <label for="title">タイトル</label>
+              </h2>
+              <p class="muted">ゲスト画面の「DJ System」の横に出る名前です。空にすると何も出ません。</p>
+              <form method="post" action="/host/session/title" class="copy-row">
+                <input id="title" name="title" maxlength={30} value={p.session.title} placeholder="例: 学祭準備・ドライブ" />
+                <button class="primary">保存</button>
+              </form>
+            </section>
+
             <section class="card stack share">
               <h2>共有</h2>
-              <form method="post" action="/host/session/title" class="title-form">
-                <label for="title">ゲスト画面の「DJ System」の横に出すタイトル</label>
-                <div class="copy-row">
-                  <input id="title" name="title" maxlength={30} value={p.session.title} placeholder="例: 学祭準備・ドライブ" />
-                  <button class="ghost">保存</button>
-                </div>
-              </form>
               <div class="qr">{raw(p.qrSvg ?? '')}</div>
               <div class="copy-row">
                 <input readonly value={p.shareUrl ?? ''} id="share-url" />

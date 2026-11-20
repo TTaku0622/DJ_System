@@ -202,8 +202,7 @@ body.host .app { padding-bottom: 32px; }
 .toggle-row span { display: flex; flex-direction: column; }
 .switch { min-width: 72px; border-radius: 999px; }
 .switch.on { background: var(--accent); border-color: transparent; color: var(--accent-ink); }
-.title-form { display: flex; flex-direction: column; gap: 6px; }
-.title-form label { font-size: 13px; }
+.title-card h2 label { display: inline; color: var(--text); font-size: inherit; }
 .import { border: 1px solid var(--line); border-radius: 14px; padding: 0 14px; }
 .import summary { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 700; cursor: pointer; list-style: none; }
 .import summary::-webkit-details-marker { display: none; }
@@ -245,13 +244,14 @@ body.host .app { padding-bottom: 32px; }
   body.guest .track { grid-template-columns: 56px minmax(0, 1fr) auto; }
   body.guest .app { padding-bottom: 48px; }
 
-  /* ホスト: 左に共有（QR）と設定、右にデフォルト曲 */
+  /* ホスト: 左にタイトル・共有（QR）・設定、右にデフォルト曲 */
   .host-layout {
-    display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); grid-template-rows: auto 1fr;
-    grid-template-areas: "share defaults" "settings defaults"; gap: 0 24px; align-items: start;
+    display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); grid-template-rows: auto auto 1fr;
+    grid-template-areas: "title defaults" "share defaults" "settings defaults"; gap: 0 24px; align-items: start;
   }
   .host-layout .card { max-width: none; }
   .host-layout .share { grid-area: share; }
+  .host-layout .title-card { grid-area: title; }
   .host-layout .settings { grid-area: settings; }
   .host-layout .defaults { grid-area: defaults; }
   .host-layout .default-list { max-height: calc(100vh - 360px); }
