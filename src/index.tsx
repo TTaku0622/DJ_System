@@ -111,6 +111,9 @@ app.get('/host/spotify', (c) => {
 })
 
 app.get('/callback', async (c) => {
+  // ホスト以外が自分のアカウントの認可コードを持ち込んで、連携を入れ替えられないようにする
+  // （host の cookie は Lax なので、Spotify から戻ってきたときも送られる）
+  if (!(await isHost(c))) return notHost(c)
   const state = getCookie(c, 'oauth_state')
   deleteCookie(c, 'oauth_state', { path: '/' })
   const code = c.req.query('code')

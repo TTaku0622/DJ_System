@@ -73,24 +73,40 @@ export async function tokenStatus(env: Env): Promise<{ connected: boolean; autho
   return row ? { connected: true, authorizedAt: row.authorized_at } : { connected: false }
 }
 
+const readToken = (env: Env) => env.DB.prepare('SELECT * FROM host_token WHERE id = 1').first<TokenRow>()
+
+// 1回の画面更新で Spotify に2つ同時に聞くので、期限切れのときに更新も同時に2回走っていた。
+// 更新中はその結果を待って使い回し、更新は1回にまとめる
+let refreshing: Promise<string> | null = null
+
 async function accessToken(env: Env): Promise<string> {
-  const row = await env.DB.prepare('SELECT * FROM host_token WHERE id = 1').first<TokenRow>()
+  const row = await readToken(env)
   if (!row) throw new SpotifyError(401, 'NOT_CONNECTED')
   if (row.expires_at > Date.now() + 60_000) return row.access_token
+  refreshing ??= refreshToken(env, row).finally(() => (refreshing = null))
+  return refreshing
+}
 
+async function refreshToken(env: Env, row: TokenRow): Promise<string> {
   const res = await tokenRequest(env, { grant_type: 'refresh_token', refresh_token: row.refresh_token })
   if (!res.ok) {
     const err = await res.json<{ error?: string }>().catch(() => ({ error: undefined }))
-    // リフレッシュトークンは初回認可から6か月で失効する → 再連携してもらう
     if (err.error === 'invalid_grant') {
-      await env.DB.prepare('DELETE FROM host_token WHERE id = 1').run()
+      // Cron など別の処理が先に更新して鍵が入れ替わっただけなら、連携は切らずに新しい鍵を使う
+      const latest = await readToken(env)
+      if (latest && latest.refresh_token !== row.refresh_token && latest.expires_at > Date.now() + 60_000) {
+        return latest.access_token
+      }
+      // 本当に失効した（初回認可から6か月）→ 再連携してもらう。その間に連携し直されていたら消さない
+      await env.DB.prepare('DELETE FROM host_token WHERE id = 1 AND refresh_token = ?').bind(row.refresh_token).run()
       throw new SpotifyError(401, 'NOT_CONNECTED')
     }
     throw new SpotifyError(res.status, err.error ?? 'token refresh failed')
   }
   const json = await res.json<{ access_token: string; refresh_token?: string; expires_in: number }>()
-  await env.DB.prepare('UPDATE host_token SET access_token = ?, refresh_token = ?, expires_at = ? WHERE id = 1')
-    .bind(json.access_token, json.refresh_token ?? row.refresh_token, Date.now() + json.expires_in * 1000)
+  // 更新中に連携し直されていたら、新しい連携を古い鍵で上書きしない
+  await env.DB.prepare('UPDATE host_token SET access_token = ?, refresh_token = ?, expires_at = ? WHERE id = 1 AND refresh_token = ?')
+    .bind(json.access_token, json.refresh_token ?? row.refresh_token, Date.now() + json.expires_in * 1000, row.refresh_token)
     .run()
   return json.access_token
 }
