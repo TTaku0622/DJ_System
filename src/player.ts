@@ -11,6 +11,7 @@ export type Session = {
   last_seen_playing_at: number | null
   last_device_id: string | null
   last_track_uri: string | null
+  stopped_at: number | null
   created_at: number
   ended_at: number | null
 }
@@ -142,19 +143,41 @@ export async function syncSession(env: Env, session: Session, pb: Playback) {
   }
 
   if (pb.isPlaying) {
-    await env.DB.prepare('UPDATE sessions SET last_seen_playing_at = ?, last_device_id = COALESCE(?, last_device_id) WHERE id = ?')
-      .bind(now, pb.deviceId, session.id).run()
+    await env.DB.prepare(
+      'UPDATE sessions SET last_seen_playing_at = ?, last_device_id = COALESCE(?, last_device_id), stopped_at = NULL WHERE id = ?',
+    ).bind(now, pb.deviceId, session.id).run()
     return
   }
 
+  // ---- 自動再開（デフォルト曲を流し終えて止まったら最初から流し直す） ----
+  // 以前は1回見ただけで判断していたため、曲の切り替わりの一瞬や Spotify の接続が一瞬切れたときにも
+  // 「流し終えた」と勘違いして、デフォルト曲の最初に戻ってしまっていた
+  const clearStop = () => env.DB.prepare('UPDATE sessions SET stopped_at = NULL WHERE id = ?').bind(session.id).run()
   if (!session.auto_resume || !session.last_seen_playing_at) return
   // 10分以上止まっているなら、ホストが止めたものとみなして触らない
   if (now - session.last_seen_playing_at > 10 * 60_000) return
-  // 曲の途中で止まっている＝一時停止。曲の終わり・曲がない状態＝デフォルト曲を流し終えた
-  const finished = !pb.current || pb.progressMs === 0 || pb.current.durationMs - pb.progressMs < 3000
-  if (!finished) return
-
-  await startDefaults(env, session, pb.deviceId ?? session.last_device_id).catch((e) => console.error('auto resume failed', e))
+  // 再生中の端末が見えない（アプリが裏に回った・電波が途切れた）ときは一時的なことが多いので触らない
+  if (!pb.deviceId || !pb.current) return
+  // ループ中は Spotify が自分でくり返す。アルバムなどデフォルト曲以外を流していたときも触らない
+  if (pb.repeat !== 'off' || pb.contextUri) return
+  // 曲の途中で止まっている＝一時停止。曲の頭か終わりで止まっている＝流し終えた
+  const finished = pb.progressMs === 0 || pb.current.durationMs - pb.progressMs < 3000
+  if (!finished) {
+    if (session.stopped_at) await clearStop()
+    return
+  }
+  // 曲の切り替わりの一瞬と区別するため、止まった状態が15秒以上続いたときだけ流し直す
+  if (!session.stopped_at) {
+    await env.DB.prepare('UPDATE sessions SET stopped_at = ? WHERE id = ?').bind(now, session.id).run()
+    return
+  }
+  if (now - session.stopped_at < 15_000) return
+  // 同時に何人も画面を開いていても、流し直すのは1回だけにする
+  const { meta } = await env.DB.prepare('UPDATE sessions SET stopped_at = NULL WHERE id = ? AND stopped_at = ?')
+    .bind(session.id, session.stopped_at).run()
+  if (!meta.changes) return
+  console.log('auto resume', { track: pb.current.name, progressMs: pb.progressMs, stoppedForMs: now - session.stopped_at })
+  await startDefaults(env, session, pb.deviceId).catch((e) => console.error('auto resume failed', e))
 }
 
 export async function addRequest(
