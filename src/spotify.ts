@@ -104,6 +104,7 @@ async function refreshToken(env: Env, row: TokenRow): Promise<string> {
     throw new SpotifyError(res.status, err.error ?? 'token refresh failed')
   }
   const json = await res.json<{ access_token: string; refresh_token?: string; expires_in: number }>()
+  console.log('spotify token refreshed', { rotated: Boolean(json.refresh_token && json.refresh_token !== row.refresh_token) })
   // 更新中に連携し直されていたら、新しい連携を古い鍵で上書きしない
   await env.DB.prepare('UPDATE host_token SET access_token = ?, refresh_token = ?, expires_at = ? WHERE id = 1 AND refresh_token = ?')
     .bind(json.access_token, json.refresh_token ?? row.refresh_token, Date.now() + json.expires_in * 1000, row.refresh_token)
