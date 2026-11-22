@@ -17,7 +17,10 @@
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html, body { margin: 0; overflow-x: hidden; }
+/* 両方を hidden にすると body がスクロールの入れ物になり、PC の「今の曲」の固定（sticky）が効かなくなる */
+html, body { margin: 0; }
+html { overflow-x: hidden; }
+body { overflow-x: clip; }
 body {
   background: var(--bg);
   color: var(--text);
