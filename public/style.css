@@ -173,6 +173,7 @@ body.guest::before {
 }
 .msg-dialog::backdrop { background: rgb(0 0 0 / .6); }
 .msg-dialog form { display: flex; flex-direction: column; gap: 14px; }
+.msg-dialog h2 { font-size: 17px; }
 .msg-track { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 12px; align-items: center; }
 .msg-track img { width: 56px; height: 56px; border-radius: 10px; }
 .msg-track .name { font-weight: 700; }

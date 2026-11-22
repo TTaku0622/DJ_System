@@ -23,6 +23,25 @@ document.querySelectorAll('[data-share]').forEach((button) => {
   })
 })
 
+// 押し間違えると困る操作は、実行する前に確認する（JS が使えないときは確認なしで動く）
+const confirmBox = document.getElementById('confirm-dialog')
+let confirming = null
+if (confirmBox) document.querySelectorAll('form[data-confirm]').forEach((form) => {
+  form.addEventListener('submit', (e) => {
+    e.preventDefault()
+    confirming = form
+    document.getElementById('confirm-title').textContent = form.dataset.confirm
+    document.getElementById('confirm-note').textContent = form.dataset.note
+    document.getElementById('confirm-ok').textContent = form.dataset.ok
+    confirmBox.returnValue = ''
+    confirmBox.showModal()
+  })
+})
+document.getElementById('confirm-cancel')?.addEventListener('click', () => confirmBox.close())
+confirmBox?.addEventListener('close', () => {
+  if (confirmBox.returnValue === 'ok') confirming.submit()
+})
+
 // ---- デフォルト曲（紐付けプレイリストの中身）の表示・検索・追加・削除 ----
 const defaults = document.getElementById('defaults')
 if (defaults) {

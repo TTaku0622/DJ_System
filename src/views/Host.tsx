@@ -114,7 +114,13 @@ export const HostPage = (p: HostProps) => (
               <ol id="default-list" class="tracks default-list">
                 <li class="empty">読み込み中…</li>
               </ol>
-              <form method="post" action="/host/session/play">
+              <form
+                method="post"
+                action="/host/session/play"
+                data-confirm="デフォルト曲を最初から流しますか？"
+                data-note="今流れている曲は、途中で切り替わります。"
+                data-ok="流す"
+              >
                 <button class="primary wide">デフォルト曲を最初から流す</button>
               </form>
             </section>
@@ -133,7 +139,14 @@ export const HostPage = (p: HostProps) => (
                 label="自動再開"
                 note="デフォルト曲を流し終えて止まったら最初から流し直す"
               />
-              <form method="post" action="/host/session/renew" class="stack">
+              <form
+                method="post"
+                action="/host/session/renew"
+                class="stack"
+                data-confirm="共有 URL を作り直しますか？"
+                data-note="今の URL と QR は使えなくなり、開いている人も入れなくなります。まだ流れていないリクエストの名前も出なくなります。"
+                data-ok="作り直す"
+              >
                 <button class="danger wide">共有 URL を作り直す</button>
                 <small class="muted">前の URL と QR は使えなくなります。デフォルト曲はそのまま残ります</small>
               </form>
@@ -148,6 +161,17 @@ export const HostPage = (p: HostProps) => (
         )
       )}
     </main>
+
+    <dialog id="confirm-dialog" class="msg-dialog">
+      <form method="dialog">
+        <h2 id="confirm-title"></h2>
+        <p class="muted" id="confirm-note"></p>
+        <div class="actions">
+          <button type="button" id="confirm-cancel" class="ghost">やめる</button>
+          <button value="ok" id="confirm-ok" class="primary"></button>
+        </div>
+      </form>
+    </dialog>
     <script src="/host.js" defer></script>
   </Layout>
 )
