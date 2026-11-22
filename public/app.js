@@ -92,7 +92,7 @@ function setAccent(color) {
 }
 
 // ---- 再生状態 ----
-let currentUri = null
+let currentUri // まだ一度も描いていないときは undefined（null は「再生していない」）
 
 function trackRow(t, extra) {
   return el('li', { class: 'track' },
@@ -138,14 +138,31 @@ function render(state) {
   }
 }
 
+function showProblem(message) {
+  const notice = $('notice')
+  notice.hidden = false
+  notice.textContent = message
+  if (currentUri === undefined) {
+    $('now-title').textContent = '再生状態が取れません'
+    $('now-label').textContent = ''
+  }
+}
+
 let pollTimer
+let failures = 0
 async function poll() {
   clearTimeout(pollTimer)
+  let problem = '通信できていません。電波を確かめてください'
   try {
     const res = await fetch(`${API}/state`, { cache: 'no-store' })
     if (res.status === 404) return location.reload() // セッション終了
-    if (res.ok) render(await res.json())
+    const json = await res.json().catch(() => null)
+    problem = res.ok && json ? null : json?.error ?? '今の状態を取れません。少し待ってください'
+    if (!problem) render(json)
   } catch {}
+  failures = problem ? failures + 1 : 0
+  // 1回だけの失敗ではちらつかせない。まだ何も出せていないときはすぐ知らせる
+  if (problem && (failures >= 2 || currentUri === undefined)) showProblem(problem)
   if (!document.hidden) pollTimer = setTimeout(poll, 5000)
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll() })

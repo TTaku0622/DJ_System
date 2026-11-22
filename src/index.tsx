@@ -253,7 +253,16 @@ app.use('/api/s/:id/*', async (c, next) => {
   return next()
 })
 
-app.get('/api/s/:id/state', async (c) => c.json(await stateView(c.env, c.get('session'))))
+app.get('/api/s/:id/state', async (c) => {
+  try {
+    return c.json(await stateView(c.env, c.get('session')))
+  } catch (e) {
+    // 混み合い（429）は onError に任せる
+    if (!(e instanceof SpotifyError) || e.status === 429) throw e
+    console.error(e)
+    return c.json({ error: 'ホストの Spotify につながりません' }, 502)
+  }
+})
 
 app.get('/api/s/:id/search', async (c) => {
   const q = (c.req.query('q') ?? '').trim().slice(0, 100)
