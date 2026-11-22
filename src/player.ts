@@ -29,11 +29,9 @@ export type Playback = {
 }
 
 type RequestRow = {
-  id: number
   track_uri: string
   nickname: string | null
   comment: string | null
-  played_at: number | null
 }
 
 export type RequestInfo = { nickname: string | null; comment: string | null }
@@ -279,6 +277,10 @@ export type StateView = {
   notice: string | null
 }
 
+// 同じ再生状態（数秒の使い回し中）なら、記録の読み書きもやり直さない。
+// 画面の更新1回ごとに読んでいると、人数 × 件数で D1 の無料枠（1日500万行）に届いてしまう
+let lastView: { sessionId: string; pb: Playback; value: StateView } | null = null
+
 // ゲスト画面に出す形にまとめる（リクエストした人の名前・コメントを曲にくっつける）
 export async function stateView(env: Env, session: Session): Promise<StateView> {
   let pb: Playback
@@ -290,23 +292,26 @@ export async function stateView(env: Env, session: Session): Promise<StateView> 
     }
     throw e
   }
+  if (lastView?.pb === pb && lastView.sessionId === session.id) return { ...lastView.value, title: session.title }
   await syncSession(env, session, pb)
 
-  const { results } = await env.DB.prepare(
-    'SELECT id, track_uri, nickname, comment, played_at FROM requests WHERE session_id = ? ORDER BY id',
-  ).bind(session.id).all<RequestRow>()
+  // 過去のリクエストは増え続けるので全部は読まず、待っている分と、今の曲の分だけ読む。
+  // いま流れている曲が直近に再生済みになったリクエストなら、その人の名前を出す
+  const recent = Date.now() - (pb.current?.durationMs ?? 0) - 60_000
+  const [waiting, playing] = await env.DB.batch<RequestRow>([
+    env.DB.prepare('SELECT track_uri, nickname, comment FROM requests WHERE session_id = ? AND played_at IS NULL ORDER BY id')
+      .bind(session.id),
+    env.DB.prepare(
+      `SELECT track_uri, nickname, comment FROM requests WHERE session_id = ? AND played_at > ? AND track_uri = ?
+       ORDER BY played_at DESC, id DESC LIMIT 1`,
+    ).bind(session.id, recent, pb.current?.uri ?? ''),
+  ])
 
   const info = (r: RequestRow | undefined): RequestInfo | null => (r ? { nickname: r.nickname, comment: r.comment } : null)
 
-  let current: StateView['current'] = null
-  if (pb.current) {
-    // いま流れている曲が直近に再生済みになったリクエストなら、その人の名前を出す
-    const recent = Date.now() - pb.current.durationMs - 60_000
-    const req = [...results].reverse().find((r) => r.track_uri === pb.current!.uri && r.played_at && r.played_at > recent)
-    current = { ...pb.current, request: info(req) }
-  }
+  const current: StateView['current'] = pb.current ? { ...pb.current, request: info(playing.results[0]) } : null
 
-  const pending = results.filter((r) => !r.played_at)
+  const pending = [...waiting.results]
   const next = pb.next.slice(0, 6).map((t) => {
     const i = pending.findIndex((r) => r.track_uri === t.uri)
     const req = i >= 0 ? pending.splice(i, 1)[0] : undefined
@@ -318,5 +323,7 @@ export async function stateView(env: Env, session: Session): Promise<StateView> 
   // デフォルト曲は曲を直接指定して流すので context が無い。context があるならアルバムなど別のものを流している
   else if (pb.contextUri) notice = 'デフォルト曲以外（アルバムやプレイリスト）を再生中です'
 
-  return { isPlaying: pb.isPlaying, current, next, repeat: pb.repeat, title: session.title, notice }
+  const value = { isPlaying: pb.isPlaying, current, next, repeat: pb.repeat, title: session.title, notice }
+  lastView = { sessionId: session.id, pb, value }
+  return value
 }
