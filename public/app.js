@@ -194,12 +194,13 @@ async function add(t, nickname, comment, button) {
       body: JSON.stringify({ uri: t.uri, name: t.name, artist: t.artist, image: t.image, nickname, comment }),
     })
     const json = await res.json()
-    if (!res.ok) throw new Error(json.error)
+    if (!res.ok) throw Object.assign(new Error(json.error), { duplicate: json.duplicate })
     toast(json.ahead === 0 ? `「${t.name}」を追加しました・次に流れます` : `「${t.name}」を追加しました・あと${json.ahead}曲のあとに流れます`)
     closeResults()
     setTimeout(poll, 800)
   } catch (err) {
-    toast(err.message || '追加できませんでした', true)
+    // 同じ曲がもう入っているのは失敗ではないので、赤くしない
+    toast(err.message || '追加できませんでした', !err.duplicate)
     if (button) button.disabled = false
   }
 }

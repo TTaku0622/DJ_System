@@ -225,11 +225,37 @@ export async function syncSession(env: Env, session: Session, pb: Playback) {
   await startDefaults(env, session, pb.deviceId).catch((e) => console.error('auto resume failed', e))
 }
 
+export type AddResult = { ahead: number; duplicate?: 'playing' | 'waiting' }
+
+// 今流れている曲か、まだ待っているリクエストと同じ曲なら重複。流れ終わった曲は、また追加できる
+async function findDuplicate(env: Env, session: Session, uri: string): Promise<AddResult | null> {
+  // 再生状態が取れないときは、追加を止めない
+  const pb = await playback(env).catch(() => null)
+  if (pb?.isPlaying && pb.current?.uri === uri) return { duplicate: 'playing', ahead: 0 }
+
+  const { results: pending } = await env.DB.prepare(
+    'SELECT track_uri, created_at FROM requests WHERE session_id = ? AND played_at IS NULL ORDER BY id',
+  ).bind(session.id).all<{ track_uri: string; created_at: number }>()
+  const i = pending.findIndex((r) => r.track_uri === uri)
+  if (i < 0) return null
+  // ホストが Spotify のキューを空にすると、記録だけが残る。その曲までのリクエストが1曲もキューに無ければ、
+  // もう待っていないとみなして追加できるようにする（入れた直後はキューにまだ出ないことがあるので除く）
+  const queue = pb?.queue
+  const waiting =
+    !queue ||
+    pending.slice(0, i + 1).some((r) => queue.includes(r.track_uri)) ||
+    Date.now() - pending[i].created_at < 60_000
+  return waiting ? { duplicate: 'waiting', ahead: i } : null
+}
+
 export async function addRequest(
   env: Env,
   session: Session,
   input: { uri: string; name: string; artist: string; image: string; nickname: string | null; comment: string | null },
-): Promise<{ ahead: number }> {
+): Promise<AddResult> {
+  const duplicate = await findDuplicate(env, session, input.uri)
+  if (duplicate) return duplicate
+
   // キューに入れれば、今の曲の後にリクエスト順で必ず流れる。
   // デフォルト曲（プレイリスト）はホストが選んだ曲だけにするので、リクエストはそこに入れない
   await api(env, 'POST', `/me/player/queue?uri=${encodeURIComponent(input.uri)}`)

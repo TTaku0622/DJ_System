@@ -258,15 +258,21 @@ app.post('/api/s/:id/requests', async (c) => {
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>)
   const uri = body.uri
   if (!isTrackUri(uri)) return c.json({ error: 'bad track' }, 400)
+  const name = clean(body.name, 200) ?? ''
   try {
     const result = await addRequest(c.env, c.get('session'), {
       uri,
-      name: clean(body.name, 200) ?? '',
+      name,
       artist: clean(body.artist, 200) ?? '',
       image: clean(body.image, 300) ?? '',
       nickname: clean(body.nickname, 20),
       comment: clean(body.comment, 60),
     })
+    if (result.duplicate) {
+      const when = result.ahead === 0 ? '次に流れます' : `あと${result.ahead}曲のあとに流れます`
+      const message = result.duplicate === 'playing' ? 'は今流れています' : `はもう入っています・${when}`
+      return c.json({ error: `「${name}」${message}`, duplicate: result.duplicate }, 409)
+    }
     return c.json(result)
   } catch (e) {
     if (e instanceof SpotifyError && (e.status === 404 || e.reason === 'NO_ACTIVE_DEVICE')) {
