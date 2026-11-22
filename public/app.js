@@ -214,8 +214,10 @@ function openMessage(t) {
     el('div', { class: 'name', text: t.name }), el('div', { class: 'sub muted', text: t.artist })))
   form.nickname.value = store.get(NICK_KEY)
   form.comment.value = ''
+  dialog.returnValue = '' // 前回の「追加する」が残っていると、Esc で閉じても追加されるブラウザがある
   dialog.showModal()
 }
+$('msg-cancel')?.addEventListener('click', () => dialog.close())
 dialog.addEventListener('close', () => {
   if (dialog.returnValue !== 'ok' || !pending) return
   const nickname = form.nickname.value.trim()

@@ -79,7 +79,8 @@ export const GuestPage = (props: { session: Session }) => (
           <input name="comment" maxlength={60} placeholder="ひとこと" />
         </label>
         <div class="actions">
-          <button value="cancel" formnovalidate class="ghost">やめる</button>
+          {/* 入力欄で Enter を押すと最初の送信ボタンが押されるので、「やめる」は送信ボタンにしない */}
+          <button type="button" id="msg-cancel" class="ghost">やめる</button>
           <button value="ok" class="primary">追加する</button>
         </div>
       </form>
