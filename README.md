@@ -33,7 +33,7 @@ npm run tunnel
 2. `npm run tunnel` で起動し、`https://xxxx.trycloudflare.com/host/enter/<HOST_KEY>` をその人に送る
 3. Dashboard の Redirect URIs に `https://xxxx.trycloudflare.com/callback` を足して Save（起動し直すと URL が変わるので毎回）
 4. その人がホスト画面の「Spotify と連携し直す」で自分のアカウントにログイン → デフォルト曲を選んで共有
-- 連携は1人分だけなので、その人の連携に入れ替わる。自分の Spotify に戻すときは自分で「連携し直す」を押す
+- 連携は1人分だけなので、その人の連携に入れ替わる（登録されていないアカウントのときは入れ替えず、今までの連携を残す）。自分の Spotify に戻すときは自分で「連携し直す」を押す
 - デフォルト曲の一覧はアプリに1つだけ。誰がホストでも同じ一覧を使う
 
 ## 本番（Cloudflare Workers）

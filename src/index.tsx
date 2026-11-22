@@ -120,8 +120,19 @@ app.get('/callback', async (c) => {
   if (!state || state !== c.req.query('state') || !code) {
     return c.html(<MessagePage title="連携できませんでした" message="もう一度ホスト画面からやり直してください。" />, 400)
   }
-  // 連携を始めたときと同じ戻り先を渡す（TryCloudflare 経由なら https://…trycloudflare.com/callback）
-  await exchangeCode(c.env, code, `${baseUrl(c)}/callback`)
+  try {
+    // 連携を始めたときと同じ戻り先を渡す（TryCloudflare 経由なら https://…trycloudflare.com/callback）
+    await exchangeCode(c.env, code, `${baseUrl(c)}/callback`)
+  } catch (e) {
+    if (!(e instanceof SpotifyError)) throw e
+    console.error('spotify link failed', e)
+    const reason = e.status === 403
+      ? 'このアカウントは Spotify に断られました。User Management に登録されているか確かめてください'
+      : `Spotify でエラーが起きました（${e.status}）。少し待ってもう一度試してください`
+    const kept = (await tokenStatus(c.env)).connected ? '。今までの連携はそのままです' : ''
+    return c.redirect('/host?msg=' + encodeURIComponent(`連携できませんでした。${reason}${kept}`))
+  }
+  invalidatePlayback()
   return c.redirect('/host?msg=' + encodeURIComponent('Spotify と連携しました'))
 })
 

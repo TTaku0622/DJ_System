@@ -58,6 +58,10 @@ export async function exchangeCode(env: Env, code: string, redirectUri: string):
   const res = await tokenRequest(env, { grant_type: 'authorization_code', code, redirect_uri: redirectUri })
   if (!res.ok) throw new SpotifyError(res.status, await res.text())
   const json = await res.json<{ access_token: string; refresh_token: string; expires_in: number }>()
+  // User Management に登録されていない人も、ログインと許可まではできてしまう。
+  // 保存する前に実際に使えるか確かめ、使えないなら今までの連携を残す
+  const check = await fetch(`${API}/me/player`, { headers: { Authorization: `Bearer ${json.access_token}` } })
+  if (!check.ok) throw new SpotifyError(check.status, 'NOT_USABLE')
   const now = Date.now()
   await env.DB.prepare(
     `INSERT INTO host_token (id, access_token, refresh_token, expires_at, authorized_at) VALUES (1, ?, ?, ?, ?)
