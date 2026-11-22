@@ -21,6 +21,7 @@ export type Playback = {
   progressMs: number
   current: Track | null
   next: Track[]
+  queue: string[] | null // Spotify が返したままの並び（取れなかったときは null）
   deviceId: string | null
   contextUri: string | null
   shuffle: boolean
@@ -54,7 +55,8 @@ export async function playback(env: Env): Promise<Playback> {
   ])
   const current = toTrack(state?.item)
   const repeat: Playback['repeat'] = state?.repeat_state === 'context' || state?.repeat_state === 'track' ? state.repeat_state : 'off'
-  let next: Track[] = (queue?.queue ?? []).map(toTrack).filter((t: Track | null): t is Track => t !== null)
+  const upcoming: Track[] = (queue?.queue ?? []).map(toTrack).filter((t: Track | null): t is Track => t !== null)
+  let next = upcoming
   if (repeat !== 'off') {
     // ループ中の Spotify は同じ曲をくり返し並べて返すので、1曲1回だけにする。1曲リピートなら今の曲は並べない
     const seen = new Set(repeat === 'track' && current ? [current.uri] : [])
@@ -65,6 +67,8 @@ export async function playback(env: Env): Promise<Playback> {
     progressMs: state?.progress_ms ?? 0,
     current,
     next,
+    // 1曲リピート中は今の曲も「次」に並ぶので除く
+    queue: queue ? upcoming.map((t) => t.uri).filter((uri) => repeat !== 'track' || uri !== current?.uri) : null,
     deviceId: state?.device?.id ?? null,
     contextUri: state?.context?.uri ?? null,
     shuffle: Boolean(state?.shuffle_state),
@@ -128,19 +132,60 @@ export async function startDefaults(env: Env, session: Session, deviceId: string
   invalidatePlayback()
 }
 
+// ---- 再生済みの記録 ----
+
+// 2つの並びに、同じ順番で共通して出てくる曲の数（間に別の曲が挟まっていてもよい）
+function commonInOrder(a: string[], b: string[]): number {
+  let row: number[] = new Array(b.length + 1).fill(0)
+  for (const x of a) {
+    const prev = row
+    row = [0]
+    for (let j = 1; j <= b.length; j++) row[j] = x === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], row[j - 1])
+  }
+  return row[b.length]
+}
+
+// 今流れている曲が未再生リクエストの何番目かを決め、そこまでの件数を返す（決められなければ 0）。
+// 同じ曲が2回リクエストされていると曲だけでは区別できないので、キューにまだ残っている曲が
+// 全部その後ろに並んでいるものだけを「これが流れている」とみなす
+export function playedCount(pending: string[], current: string, queue: string[]): number {
+  // リクエストはキューの先頭側に並ぶ。ホストが直接足した曲の分だけ少し余裕を見る
+  const head = queue.slice(0, pending.length + 3)
+  const left = commonInOrder(pending, head)
+  return pending.findIndex((uri, i) => uri === current && commonInOrder(pending.slice(i + 1), head) === left) + 1
+}
+
+// 曲が変わったら、その曲のリクエスト（と、見逃したそれより前の分）を再生済みにする
+async function markPlayed(env: Env, session: Session, uri: string, queue: string[]) {
+  const { results: pending } = await env.DB.prepare(
+    'SELECT id, track_uri FROM requests WHERE session_id = ? AND played_at IS NULL ORDER BY id',
+  ).bind(session.id).all<{ id: number; track_uri: string }>()
+
+  let lastId: number | null = null
+  if (pending.some((r) => r.track_uri === uri)) {
+    // デフォルト曲と同じ曲は、キューにあってもリクエストの分とは限らないので手がかりにしない
+    const defaults = new Set((await defaultTracks(env)).map((t) => t.uri))
+    const count = playedCount(pending.map((r) => r.track_uri), uri, queue.filter((u) => !defaults.has(u)))
+    // まだ決められない（キューの情報が古いなど）。曲が変わったことにせず、次の確認でもう一度見る
+    if (count === 0) return
+    lastId = pending[count - 1].id
+  }
+
+  // 同時に何人も画面を開いていても、1回の曲の変わり目で処理するのは1回だけにする。
+  // 2回処理すると、2回目が同じ曲の別のリクエストまで再生済みにしてしまう
+  const { meta } = await env.DB.prepare('UPDATE sessions SET last_track_uri = ? WHERE id = ? AND last_track_uri IS ?')
+    .bind(uri, session.id, session.last_track_uri).run()
+  if (!meta.changes || lastId === null) return
+  await env.DB.prepare('UPDATE requests SET played_at = ? WHERE session_id = ? AND played_at IS NULL AND id <= ?')
+    .bind(Date.now(), session.id, lastId).run()
+}
+
 // ポーリングと Cron の両方から呼ぶ。再生済みの記録と、止まったときの自動再開
 export async function syncSession(env: Env, session: Session, pb: Playback) {
   const now = Date.now()
   const uri = pb.current?.uri ?? null
 
-  if (uri && uri !== session.last_track_uri) {
-    // 曲が変わったら、その曲のリクエスト（とそれより前に入った未再生分）を再生済みにする
-    await env.DB.prepare(
-      `UPDATE requests SET played_at = ? WHERE session_id = ? AND played_at IS NULL AND id <= (
-         SELECT id FROM requests WHERE session_id = ? AND track_uri = ? AND played_at IS NULL ORDER BY id LIMIT 1)`,
-    ).bind(now, session.id, session.id, uri).run()
-    await env.DB.prepare('UPDATE sessions SET last_track_uri = ? WHERE id = ?').bind(uri, session.id).run()
-  }
+  if (uri && uri !== session.last_track_uri && pb.queue) await markPlayed(env, session, uri, pb.queue)
 
   if (pb.isPlaying) {
     await env.DB.prepare(
