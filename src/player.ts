@@ -1,4 +1,5 @@
 // 再生状態の取得・リクエスト追加・デフォルト曲の自動再開
+import { waitUntil } from 'cloudflare:workers'
 import { Shared } from './shared'
 import { api, Env, SpotifyError, toTrack, Track } from './spotify'
 
@@ -13,6 +14,8 @@ export type Session = {
   last_device_id: string | null
   last_track_uri: string | null
   stopped_at: number | null
+  current_request_id: number | null
+  adding_at: number | null
   created_at: number
   ended_at: number | null
 }
@@ -23,6 +26,7 @@ export type Playback = {
   current: Track | null
   next: Track[]
   queue: string[] | null // Spotify が返したままの並び（取れなかったときは null）
+  more: boolean // この後ろにもまだ続きがあるかもしれない
   endsAt: number | null // 今の曲が終わる見込みの時刻（止まっているときは null）
   deviceId: string | null
   contextUri: string | null
@@ -42,6 +46,8 @@ export type RequestInfo = { nickname: string | null; comment: string | null }
 const CACHE_MS = 4000
 // 混み合っている（429）間、前の状態を出しておく長さの上限
 const STALE_MS = 60_000
+// Spotify が返す「次の曲」は先頭20曲まで（公式の説明には無いが、開発者の報告による）
+const QUEUE_LIMIT = 20
 
 let cache: { at: number; value: Playback } | null = null
 let failed: { until: number; error: SpotifyError } | null = null
@@ -116,6 +122,7 @@ async function loadPlayback(env: Env): Promise<Playback> {
     next,
     // 1曲リピート中は今の曲も「次」に並ぶので除く
     queue: queue ? upcoming.map((t) => t.uri).filter((uri) => repeat !== 'track' || uri !== current?.uri) : null,
+    more: (queue?.queue?.length ?? 0) >= QUEUE_LIMIT,
     endsAt: state?.is_playing && current ? Date.now() + current.durationMs - (state.progress_ms ?? 0) : null,
     deviceId: state?.device?.id ?? null,
     contextUri: state?.context?.uri ?? null,
@@ -271,49 +278,103 @@ export async function syncSession(env: Env, session: Session, pb: Playback) {
   await startDefaults(env, session, pb.deviceId).catch((e) => console.error('auto resume failed', e))
 }
 
-export type AddResult = { ahead: number; duplicate?: 'playing' | 'waiting' }
+// ---- リクエストの追加 ----
 
-// 今流れている曲か、まだ待っているリクエストと同じ曲なら重複。流れ終わった曲は、また追加できる
-async function findDuplicate(env: Env, session: Session, uri: string): Promise<AddResult | null> {
-  // 再生状態が取れないときは、追加を止めない
-  const pb = await playback(env).catch(() => null)
-  if (pb?.isPlaying && pb.current?.uri === uri) return { duplicate: 'playing', ahead: 0 }
-
-  const { results: pending } = await env.DB.prepare(
-    'SELECT track_uri, created_at FROM requests WHERE session_id = ? AND played_at IS NULL ORDER BY id',
-  ).bind(session.id).all<{ track_uri: string; created_at: number }>()
-  const i = pending.findIndex((r) => r.track_uri === uri)
-  if (i < 0) return null
-  // ホストが Spotify のキューを空にすると、記録だけが残る。その曲までのリクエストが1曲もキューに無ければ、
-  // もう待っていないとみなして追加できるようにする（入れた直後はキューにまだ出ないことがあるので除く）
-  const queue = pb?.queue
-  const waiting =
-    !queue ||
-    pending.slice(0, i + 1).some((r) => queue.includes(r.track_uri)) ||
-    Date.now() - pending[i].created_at < 60_000
-  return waiting ? { duplicate: 'waiting', ahead: i } : null
+// 記録の「待っているリクエスト」を、Spotify のキューの並びと突き合わせる。
+// matched はキューの各曲に対応するリクエスト、beyond はキューに見えている範囲より後ろで待っているリクエスト
+function matchQueue<T extends { track_uri: string }>(pending: T[], queue: string[], more: boolean) {
+  const used = new Set<T>()
+  let last: T | undefined // キューに見えている最後のリクエスト
+  let after = 0 // その後ろに並んでいる、リクエストでない曲の数
+  const matched = queue.map((uri) => {
+    const r = pending.find((p) => p.track_uri === uri && !used.has(p))
+    if (r) used.add(r)
+    if (r) last = r
+    after = r ? 0 : after + 1
+    return r
+  })
+  // 見えている範囲の終わりまでリクエストが続いているときだけ、その先にもリクエストがあるとみなす
+  // （ホストが直接足した曲の分だけ少し余裕を見る）
+  if (!more || !last || after > 3) return { matched, beyond: [] }
+  const from = pending.indexOf(last)
+  return { matched, beyond: pending.filter((r, i) => i > from && !used.has(r)) }
 }
+
+type PendingRow = { track_uri: string; created_at: number }
+
+// 記録では待っているリクエストのうち、実際にまだ待っているものを流れる順に並べる。
+// ホストが Spotify アプリでキューから消すと記録だけが残るので、それは数えない
+function stillWaiting(pending: PendingRow[], pb: Playback | null): PendingRow[] {
+  // キューが分からないとき（1曲リピート中は先が見えない）は、記録のとおりとみなす
+  if (!pb?.queue || pb.repeat === 'track') return pending
+  const { matched, beyond } = matchQueue(pending, pb.queue, pb.more)
+  const found = [...matched.filter((r) => r !== undefined), ...beyond]
+  // 入れた直後はキューにまだ出ないことがある
+  const recent = pending.filter((r) => !found.includes(r) && Date.now() - r.created_at < 60_000)
+  return [...found, ...recent]
+}
+
+// 追加は1件ずつ順番に行う。同時に進めると、同じ曲が2回入ったり、Spotify のキューと記録の順番が入れ替わったりする
+const TURN_MS = 5000
+async function inTurn<T>(env: Env, session: Session, work: () => Promise<T>): Promise<T> {
+  let mine = 0
+  for (let i = 0; i < 30 && !mine; i++) {
+    const now = Date.now()
+    // 途中で止まった人の印は、しばらくたてば無視する
+    const { meta } = await env.DB.prepare('UPDATE sessions SET adding_at = ? WHERE id = ? AND (adding_at IS NULL OR adding_at < ?)')
+      .bind(now, session.id, now - TURN_MS).run()
+    if (meta.changes) mine = now
+    else await new Promise((r) => setTimeout(r, 150 + i * 20 + Math.random() * 150))
+  }
+  // 順番が回ってこないときは、追加できないよりはよいので、そのまま進める
+  try {
+    return await work()
+  } finally {
+    if (mine) {
+      await env.DB.prepare('UPDATE sessions SET adding_at = NULL WHERE id = ? AND adding_at = ?').bind(session.id, mine).run()
+    }
+  }
+}
+
+export type AddResult = { ahead: number; duplicate?: 'playing' | 'waiting' }
 
 export async function addRequest(
   env: Env,
   session: Session,
   input: { uri: string; name: string; artist: string; image: string; nickname: string | null; comment: string | null },
 ): Promise<AddResult> {
-  const duplicate = await findDuplicate(env, session, input.uri)
-  if (duplicate) return duplicate
+  // 再生状態が取れないときは、追加を止めない
+  const pb = await playback(env).catch(() => null)
+  // 今流れている曲か、まだ待っているリクエストと同じ曲なら重複。流れ終わった曲は、また追加できる
+  if (pb?.isPlaying && pb.current?.uri === input.uri) return { duplicate: 'playing', ahead: 0 }
 
-  // キューに入れれば、今の曲の後にリクエスト順で必ず流れる。
-  // デフォルト曲（プレイリスト）はホストが選んだ曲だけにするので、リクエストはそこに入れない
-  await api(env, 'POST', `/me/player/queue?uri=${encodeURIComponent(input.uri)}`)
+  const job = inTurn(env, session, async (): Promise<AddResult> => {
+    const { results: pending } = await env.DB.prepare(
+      'SELECT track_uri, created_at FROM requests WHERE session_id = ? AND played_at IS NULL ORDER BY id',
+    ).bind(session.id).all<PendingRow>()
+    const waiting = stillWaiting(pending, pb)
+    const i = waiting.findIndex((r) => r.track_uri === input.uri)
+    if (i >= 0) return { duplicate: 'waiting', ahead: i }
 
-  const pending = await env.DB.prepare('SELECT COUNT(*) AS n FROM requests WHERE session_id = ? AND played_at IS NULL')
-    .bind(session.id).first<{ n: number }>()
-  await env.DB.prepare(
-    `INSERT INTO requests (session_id, track_uri, track_name, artist, image_url, nickname, comment, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).bind(session.id, input.uri, input.name, input.artist, input.image, input.nickname, input.comment, Date.now()).run()
-  invalidatePlayback()
-  return { ahead: pending?.n ?? 0 }
+    // キューに入れれば、今の曲の後にリクエスト順で必ず流れる。
+    // デフォルト曲（プレイリスト）はホストが選んだ曲だけにするので、リクエストはそこに入れない
+    await api(env, 'POST', `/me/player/queue?uri=${encodeURIComponent(input.uri)}`)
+    const now = Date.now()
+    await env.DB.batch([
+      // ホストがキューから消した同じ曲の記録が残っていると、前の人の名前が付いてしまうので片付ける
+      env.DB.prepare('UPDATE requests SET played_at = ? WHERE session_id = ? AND track_uri = ? AND played_at IS NULL')
+        .bind(now, session.id, input.uri),
+      env.DB.prepare(
+        `INSERT INTO requests (session_id, track_uri, track_name, artist, image_url, nickname, comment, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(session.id, input.uri, input.name, input.artist, input.image, input.nickname, input.comment, now),
+    ])
+    invalidatePlayback()
+    return { ahead: waiting.length }
+  })
+  // 追加した人がすぐ画面を閉じても、キューに入れたのに記録だけ無い、ということにならないよう最後まで進める
+  waitUntil(job.catch(() => {}))
+  return job
 }
 
 export type StateView = {

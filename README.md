@@ -46,6 +46,8 @@ npx wrangler secret put SPOTIFY_CLIENT_SECRET
 npx wrangler secret put HOST_KEY
 npm run deploy
 ```
+更新するときは、`migrations/` が増えていたら先に `npm run db:migrate:remote` をしてから `npm run deploy` する。
+
 本番のホスト画面は `https://dj-system.<アカウント>.workers.dev/host/enter/<HOST_KEY>` をブックマークしておく。
 GitHub に push して自動で反映したい場合は、Cloudflare ダッシュボードの Workers → 設定 → Builds でこのリポジトリをつなぐ。
 
