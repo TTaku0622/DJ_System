@@ -227,8 +227,9 @@ async function markPlayed(env: Env, session: Session, uri: string, queue: string
 
   // 同時に何人も画面を開いていても、1回の曲の変わり目で処理するのは1回だけにする。
   // 2回処理すると、2回目が同じ曲の別のリクエストまで再生済みにしてしまう
-  const { meta } = await env.DB.prepare('UPDATE sessions SET last_track_uri = ? WHERE id = ? AND last_track_uri IS ?')
-    .bind(uri, session.id, session.last_track_uri).run()
+  const { meta } = await env.DB.prepare(
+    'UPDATE sessions SET last_track_uri = ?, current_request_id = ? WHERE id = ? AND last_track_uri IS ?',
+  ).bind(uri, lastId, session.id, session.last_track_uri).run()
   if (!meta.changes || lastId === null) return
   await env.DB.prepare('UPDATE requests SET played_at = ? WHERE session_id = ? AND played_at IS NULL AND id <= ?')
     .bind(Date.now(), session.id, lastId).run()
@@ -434,18 +435,15 @@ async function finish(view: StateView): Promise<Built> {
 async function buildView(env: Env, session: Session, pb: Playback): Promise<Built> {
   await syncSession(env, session, pb)
 
-  // 過去のリクエストは増え続けるので全部は読まず、待っている分と、今の曲の分だけ読む。
-  // いま流れている曲が直近に再生済みになったリクエストなら、その人の名前を出す
-  const recent = Date.now() - (pb.current?.durationMs ?? 0) - 60_000
+  // 過去のリクエストは増え続けるので全部は読まず、待っている分と、今の曲の分だけ読む
   const [waiting, playing] = await env.DB.batch<RequestRow>([
     env.DB.prepare(
       `SELECT track_uri, track_name, artist, image_url, nickname, comment FROM requests
        WHERE session_id = ? AND played_at IS NULL ORDER BY id`,
     ).bind(session.id),
     env.DB.prepare(
-      `SELECT track_uri, track_name, artist, image_url, nickname, comment FROM requests
-       WHERE session_id = ? AND played_at > ? AND track_uri = ? ORDER BY played_at DESC, id DESC LIMIT 1`,
-    ).bind(session.id, recent, pb.current?.uri ?? ''),
+      `SELECT r.* FROM sessions s JOIN requests r ON r.id = s.current_request_id WHERE s.id = ? AND r.track_uri = ?`,
+    ).bind(session.id, pb.current?.uri ?? ''),
   ])
 
   const info = (r: RequestRow | undefined): RequestInfo | null => (r ? { nickname: r.nickname, comment: r.comment } : null)
