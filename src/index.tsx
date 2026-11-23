@@ -145,9 +145,10 @@ app.post('/host/session/play', async (c) => {
     const pb = await playback(c.env)
     await startDefaults(c.env, session, pb.deviceId ?? session.last_device_id)
   } catch (e) {
-    msg = e instanceof Error && e.message === 'NO_DEFAULTS'
-      ? 'デフォルト曲がまだありません。曲を追加してから押してください'
-      : '再生できませんでした。Spotify アプリを開いてどれか1曲流してから、もう一度押してください'
+    if (e instanceof Error && e.message === 'NO_DEFAULTS') msg = 'デフォルト曲がまだありません。曲を追加してから押してください'
+    else if (e instanceof SpotifyError && e.reason === 'NOT_CONNECTED') msg = 'Spotify の連携が切れています。連携し直してください'
+    else if (e instanceof SpotifyError && e.status === 429) msg = '混み合っています。少し待ってから、もう一度押してください'
+    else msg = '再生できませんでした。Spotify アプリを開いてどれか1曲流してから、もう一度押してください'
   }
   return c.redirect('/host?msg=' + encodeURIComponent(msg))
 })
@@ -305,6 +306,10 @@ app.post('/api/s/:id/requests', async (c) => {
 app.onError((e, c) => {
   console.error(e)
   if (e instanceof SpotifyError && e.status === 429) return c.json({ error: '混み合っています。少し待ってください' }, 429)
+  if (c.req.path.startsWith('/api/') && e instanceof SpotifyError) {
+    const error = e.reason === 'NOT_CONNECTED' ? 'ホストの Spotify 連携が切れています' : 'ホストの Spotify につながりません'
+    return c.json({ error }, 502)
+  }
   // ホスト画面には原因が分かるよう Spotify の理由も出す
   if (c.req.path.startsWith('/host/api/') && e instanceof SpotifyError) {
     return c.json({ error: `Spotify でエラーが起きました（${e.status} ${e.reason}）` }, 500)

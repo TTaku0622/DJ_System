@@ -1,4 +1,5 @@
 // 再生状態の取得・リクエスト追加・デフォルト曲の自動再開
+import { Shared } from './shared'
 import { api, Env, SpotifyError, toTrack, Track } from './spotify'
 
 export type Session = {
@@ -22,6 +23,7 @@ export type Playback = {
   current: Track | null
   next: Track[]
   queue: string[] | null // Spotify が返したままの並び（取れなかったときは null）
+  endsAt: number | null // 今の曲が終わる見込みの時刻（止まっているときは null）
   deviceId: string | null
   contextUri: string | null
   shuffle: boolean
@@ -38,18 +40,65 @@ export type RequestInfo = { nickname: string | null; comment: string | null }
 
 // ゲストが何人いても Spotify への問い合わせが増えないよう、数秒だけ使い回す
 const CACHE_MS = 4000
+// 混み合っている（429）間、前の状態を出しておく長さの上限
+const STALE_MS = 60_000
+
 let cache: { at: number; value: Playback } | null = null
+let failed: { until: number; error: SpotifyError } | null = null
+let generation = 0
+const loading = new Shared<Playback>()
 
 export function invalidatePlayback() {
   cache = null
+  generation++
+  loading.reset()
+  // 混み合い（429）で待つように言われている間は、聞き直しても断られるだけなので待つ
+  if (failed?.error.status !== 429) failed = null
 }
 
 export async function playback(env: Env): Promise<Playback> {
-  if (cache && Date.now() - cache.at < CACHE_MS) return cache.value
+  const now = Date.now()
+  if (cache) {
+    const age = now - cache.at
+    // 使い回している間に曲が終わったはずなら、取り直す
+    const ended = cache.value.endsAt !== null && now >= cache.value.endsAt
+    if (age < (ended ? 1000 : CACHE_MS)) return cache.value
+  }
+  // 混み合っている（429）間は、少し前の状態を出しておく
+  const fallback = (e: unknown) => {
+    if (e instanceof SpotifyError && e.status === 429 && cache && now - cache.at < STALE_MS) return cache.value
+    throw e
+  }
+  // 失敗した直後に全員が聞き直すと、混み合いが長引くので少し待つ
+  if (failed && now < failed.until) return fallback(failed.error)
+  const result = loading.run(async () => {
+    const mine = generation
+    try {
+      const value = await loadPlayback(env)
+      // 取っている間に曲が追加されたら、その前の状態なので使い回さない
+      if (mine === generation) cache = { at: Date.now(), value }
+      failed = null
+      return value
+    } catch (e) {
+      if (e instanceof SpotifyError) {
+        const wait = e.status === 429 ? Math.min(Math.max(e.retryAfter, 5), 300) * 1000 : CACHE_MS
+        failed = { until: Date.now() + wait, error: e }
+      }
+      throw e
+    }
+  })
+  return result.catch(fallback)
+}
+
+async function loadPlayback(env: Env): Promise<Playback> {
   const [state, queue] = await Promise.all([
     api(env, 'GET', '/me/player'),
-    // 再生端末がないときは失敗するので空扱い
-    api(env, 'GET', '/me/player/queue').catch(() => null),
+    api(env, 'GET', '/me/player/queue').catch((e) => {
+      // 混み合い（429）を「次の曲なし」と取り違えない
+      if (e instanceof SpotifyError && e.status === 429) throw e
+      // 再生端末がないときは失敗するので空扱い
+      return null
+    }),
   ])
   const current = toTrack(state?.item)
   const repeat: Playback['repeat'] = state?.repeat_state === 'context' || state?.repeat_state === 'track' ? state.repeat_state : 'off'
@@ -60,20 +109,19 @@ export async function playback(env: Env): Promise<Playback> {
     const seen = new Set(repeat === 'track' && current ? [current.uri] : [])
     next = next.filter((t) => !seen.has(t.uri) && seen.add(t.uri))
   }
-  const value: Playback = {
+  return {
     isPlaying: Boolean(state?.is_playing),
     progressMs: state?.progress_ms ?? 0,
     current,
     next,
     // 1曲リピート中は今の曲も「次」に並ぶので除く
     queue: queue ? upcoming.map((t) => t.uri).filter((uri) => repeat !== 'track' || uri !== current?.uri) : null,
+    endsAt: state?.is_playing && current ? Date.now() + current.durationMs - (state.progress_ms ?? 0) : null,
     deviceId: state?.device?.id ?? null,
     contextUri: state?.context?.uri ?? null,
     shuffle: Boolean(state?.shuffle_state),
     repeat,
   }
-  cache = { at: Date.now(), value }
-  return value
 }
 
 export async function activeSession(env: Env, id?: string): Promise<Session | null> {

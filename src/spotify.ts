@@ -1,4 +1,6 @@
 // Spotify Web API との通信。トークンはホスト1人分だけを D1 に保存する
+import { Shared } from './shared'
+
 export type Env = {
   DB: D1Database
   SPOTIFY_CLIENT_ID: string
@@ -16,7 +18,8 @@ export type Track = {
 }
 
 export class SpotifyError extends Error {
-  constructor(public status: number, public reason: string) {
+  // retryAfter: 混み合い（429）のとき、Spotify が待つように言ってきた秒数
+  constructor(public status: number, public reason: string, public retryAfter = 0) {
     super(`Spotify ${status} ${reason}`)
   }
 }
@@ -43,8 +46,17 @@ export function authorizeUrl(env: Env, redirectUri: string, state: string): stri
   return `https://accounts.spotify.com/authorize?${params}`
 }
 
+// 応答が来ないまま待ち続けないよう、8秒で見切る
+async function request(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(8000) })
+  } catch (e) {
+    throw new SpotifyError(504, e instanceof Error ? e.name : 'UNREACHABLE')
+  }
+}
+
 async function tokenRequest(env: Env, body: Record<string, string>): Promise<Response> {
-  return fetch('https://accounts.spotify.com/api/token', {
+  return request('https://accounts.spotify.com/api/token', {
     method: 'POST',
     headers: {
       Authorization: `Basic ${btoa(`${env.SPOTIFY_CLIENT_ID}:${env.SPOTIFY_CLIENT_SECRET}`)}`,
@@ -60,7 +72,7 @@ export async function exchangeCode(env: Env, code: string, redirectUri: string):
   const json = await res.json<{ access_token: string; refresh_token: string; expires_in: number }>()
   // User Management に登録されていない人も、ログインと許可まではできてしまう。
   // 保存する前に実際に使えるか確かめ、使えないなら今までの連携を残す
-  const check = await fetch(`${API}/me/player`, { headers: { Authorization: `Bearer ${json.access_token}` } })
+  const check = await request(`${API}/me/player`, { headers: { Authorization: `Bearer ${json.access_token}` } })
   if (!check.ok) throw new SpotifyError(check.status, 'NOT_USABLE')
   const now = Date.now()
   await env.DB.prepare(
@@ -79,16 +91,14 @@ export async function tokenStatus(env: Env): Promise<{ connected: boolean; autho
 
 const readToken = (env: Env) => env.DB.prepare('SELECT * FROM host_token WHERE id = 1').first<TokenRow>()
 
-// 1回の画面更新で Spotify に2つ同時に聞くので、期限切れのときに更新も同時に2回走っていた。
-// 更新中はその結果を待って使い回し、更新は1回にまとめる
-let refreshing: Promise<string> | null = null
+// 期限切れのときに何人も同時に開いていても、更新は1回にまとめる
+const refreshing = new Shared<string>()
 
 async function accessToken(env: Env): Promise<string> {
   const row = await readToken(env)
   if (!row) throw new SpotifyError(401, 'NOT_CONNECTED')
   if (row.expires_at > Date.now() + 60_000) return row.access_token
-  refreshing ??= refreshToken(env, row).finally(() => (refreshing = null))
-  return refreshing
+  return refreshing.run(() => refreshToken(env, row))
 }
 
 async function refreshToken(env: Env, row: TokenRow): Promise<string> {
@@ -118,7 +128,7 @@ async function refreshToken(env: Env, row: TokenRow): Promise<string> {
 
 export async function api<T = any>(env: Env, method: string, path: string, body?: unknown): Promise<T | null> {
   const token = await accessToken(env)
-  const res = await fetch(API + path, {
+  const res = await request(API + path, {
     method,
     // ja を付けると曲名・アーティスト名が日本語表記で返る（付けないと「Kenshi Yonezu」など）
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept-Language': 'ja' },
@@ -130,7 +140,7 @@ export async function api<T = any>(env: Env, method: string, path: string, body?
       const json = await res.json<{ error?: { reason?: string; message?: string } }>()
       reason = json.error?.reason ?? json.error?.message ?? ''
     } catch {}
-    throw new SpotifyError(res.status, reason)
+    throw new SpotifyError(res.status, reason, Number(res.headers.get('retry-after')) || 0)
   }
   // 再生操作系は本文が空か、JSON でない文字列のことがある（キュー追加は ID のような文字列が返る）
   const text = await res.text()
