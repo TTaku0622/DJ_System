@@ -1,4 +1,4 @@
-// ゲスト画面: 5秒ごとの再生状態の取得・検索・リクエスト追加
+// ゲスト画面: 再生状態の取得・検索・リクエスト追加
 const root = document.querySelector('[data-session]')
 const API = `/api/s/${root.dataset.session}`
 const $ = (id) => document.getElementById(id)
@@ -130,12 +130,30 @@ function render(state) {
   $('now-req').hidden = !c?.request
   $('now-req-text').textContent = c?.request ? requestLabel(c.request) : ''
 
-  const list = $('next')
-  list.replaceChildren(...state.next.map((t) => trackRow(t)))
-  if (state.next.length === 0) {
-    const text = state.repeat === 'track' ? 'この曲をくり返し再生中です' : 'まだありません。上の検索から曲を追加できます'
-    list.append(el('li', { class: 'empty', text }))
+  renderNext(state)
+}
+
+// 曲が100曲を超えても画像の読み直しやがたつきが起きないよう、変わった行だけを足し引きする
+let rows = new Map()
+function renderNext(state) {
+  const made = new Map()
+  for (const t of state.next) {
+    let key = JSON.stringify(t)
+    while (made.has(key)) key += '+' // 同じ曲が2回並ぶとき
+    made.set(key, rows.get(key) ?? trackRow(t))
   }
+  if (made.size === 0) {
+    const text = state.repeat === 'track' ? 'この曲をくり返し再生中です' : 'まだありません。上の検索から曲を追加できます'
+    made.set(text, el('li', { class: 'empty', text }))
+  }
+  const list = $('next')
+  for (const [key, row] of rows) if (made.get(key) !== row) row.remove()
+  let i = 0
+  for (const row of made.values()) {
+    if (list.children[i] !== row) list.insertBefore(row, list.children[i] ?? null)
+    i++
+  }
+  rows = made
 }
 
 function showProblem(message) {
@@ -148,22 +166,51 @@ function showProblem(message) {
   }
 }
 
+// 50人が開いたままでも Cloudflare の無料枠（1日10万回）に収まるよう、ふだんは15秒ごとに見て、
+// 曲の終わりと、自分が追加した直後だけ早めに見る
+const POLL_MS = 15000
 let pollTimer
+let polls = 0
 let failures = 0
+let turns = 0 // 曲の終わりを続けて見に行った回数
+let hurry = false // 自分が追加した直後
+let version = '' // 今出している内容の印
+
+function nextDelay(endsInMs) {
+  const spread = Math.random() * 2000 // 全員が同じ瞬間に聞かないようにずらす
+  if (failures) return (failures < 2 ? 5000 : POLL_MS) + spread
+  if (hurry) {
+    hurry = false
+    return 4500
+  }
+  if (endsInMs == null || endsInMs > POLL_MS) turns = 0
+  else if (turns++ < 3) return Math.max(3000, endsInMs + 1000 + spread)
+  return POLL_MS + spread
+}
+
 async function poll() {
   clearTimeout(pollTimer)
+  const mine = ++polls
   let problem = '通信できていません。電波を確かめてください'
+  let json = null
   try {
-    const res = await fetch(`${API}/state`, { cache: 'no-store' })
+    const res = await fetch(`${API}/state?v=${version}`, { cache: 'no-store' })
     if (res.status === 404) return location.reload() // セッション終了
-    const json = await res.json().catch(() => null)
+    json = await res.json().catch(() => null)
     problem = res.ok && json ? null : json?.error ?? '今の状態を取れません。少し待ってください'
-    if (!problem) render(json)
   } catch {}
+  if (mine !== polls) return // あとから聞いたほうが新しい
+  if (!problem) {
+    if (json.next) render(json) // 前と同じ内容なら、中身は来ない
+    version = json.v ?? ''
+  }
   failures = problem ? failures + 1 : 0
   // 1回だけの失敗ではちらつかせない。まだ何も出せていないときはすぐ知らせる
-  if (problem && (failures >= 2 || currentUri === undefined)) showProblem(problem)
-  if (!document.hidden) pollTimer = setTimeout(poll, 5000)
+  if (problem && (failures >= 2 || currentUri === undefined)) {
+    showProblem(problem)
+    version = '' // 直ったときに描き直す
+  }
+  if (!document.hidden) pollTimer = setTimeout(poll, nextDelay(json?.endsInMs))
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll() })
 
@@ -214,6 +261,7 @@ async function add(t, nickname, comment, button) {
     if (!res.ok) throw Object.assign(new Error(json.error), { duplicate: json.duplicate })
     toast(json.ahead === 0 ? `「${t.name}」を追加しました・次に流れます` : `「${t.name}」を追加しました・あと${json.ahead}曲のあとに流れます`)
     closeResults()
+    hurry = true
     setTimeout(poll, 800)
   } catch (err) {
     // 同じ曲がもう入っているのは失敗ではないので、赤くしない

@@ -256,7 +256,9 @@ app.use('/api/s/:id/*', async (c, next) => {
 
 app.get('/api/s/:id/state', async (c) => {
   try {
-    return c.json(await stateView(c.env, c.get('session')))
+    const { v, endsInMs, view } = await stateView(c.env, c.get('session'))
+    // 画面が持っている内容と同じなら、中身は送らない
+    return c.json(c.req.query('v') === v ? { v, endsInMs } : { v, endsInMs, ...view })
   } catch (e) {
     // 混み合い（429）は onError に任せる
     if (!(e instanceof SpotifyError) || e.status === 429) throw e

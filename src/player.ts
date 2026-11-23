@@ -36,6 +36,9 @@ export type Playback = {
 
 type RequestRow = {
   track_uri: string
+  track_name: string
+  artist: string
+  image_url: string | null
   nickname: string | null
   comment: string | null
 }
@@ -109,12 +112,10 @@ async function loadPlayback(env: Env): Promise<Playback> {
   const current = toTrack(state?.item)
   const repeat: Playback['repeat'] = state?.repeat_state === 'context' || state?.repeat_state === 'track' ? state.repeat_state : 'off'
   const upcoming: Track[] = (queue?.queue ?? []).map(toTrack).filter((t: Track | null): t is Track => t !== null)
-  let next = upcoming
-  if (repeat !== 'off') {
-    // ループ中の Spotify は同じ曲をくり返し並べて返すので、1曲1回だけにする。1曲リピートなら今の曲は並べない
-    const seen = new Set(repeat === 'track' && current ? [current.uri] : [])
-    next = next.filter((t) => !seen.has(t.uri) && seen.add(t.uri))
-  }
+  // Spotify は、ループ中や残りの曲が少ないときに同じ曲をくり返し並べて返すことがあるので、1曲1回だけにする。
+  // 1曲リピートなら今の曲は並べない
+  const seen = new Set(repeat === 'track' && current ? [current.uri] : [])
+  const next = upcoming.filter((t) => !seen.has(t.uri) && seen.add(t.uri))
   return {
     isPlaying: Boolean(state?.is_playing),
     progressMs: state?.progress_ms ?? 0,
@@ -377,62 +378,100 @@ export async function addRequest(
   return job
 }
 
+// ---- ゲスト画面に出す内容 ----
+
+export type NextTrack = Omit<Track, 'durationMs'> & { request: RequestInfo | null }
+
 export type StateView = {
   isPlaying: boolean
   current: (Track & { request: RequestInfo | null }) | null
-  next: (Track & { request: RequestInfo | null })[]
+  next: NextTrack[]
   repeat: Playback['repeat']
   title: string
   notice: string | null
 }
 
+// v は内容の印（同じなら画面は描き直さなくてよい）、endsInMs は今の曲が終わるまでの見込み
+export type State = { v: string; endsInMs: number | null; view: StateView }
+
+type Built = { v: string; view: StateView }
+
 // 同じ再生状態（数秒の使い回し中）なら、記録の読み書きもやり直さない。
 // 画面の更新1回ごとに読んでいると、人数 × 件数で D1 の無料枠（1日500万行）に届いてしまう
-let lastView: { sessionId: string; pb: Playback; value: StateView } | null = null
+let lastView: { sessionId: string; pb: Playback; built: Built } | null = null
+const building = new Shared<Built>()
 
 // ゲスト画面に出す形にまとめる（リクエストした人の名前・コメントを曲にくっつける）
-export async function stateView(env: Env, session: Session): Promise<StateView> {
+export async function stateView(env: Env, session: Session): Promise<State> {
   let pb: Playback
   try {
     pb = await playback(env)
   } catch (e) {
     if (e instanceof SpotifyError && e.reason === 'NOT_CONNECTED') {
-      return { isPlaying: false, current: null, next: [], repeat: 'off', title: session.title, notice: 'ホストの Spotify 連携が切れています' }
+      const notice = 'ホストの Spotify 連携が切れています'
+      return { ...(await finish({ isPlaying: false, current: null, next: [], repeat: 'off', title: session.title, notice })), endsInMs: null }
     }
     throw e
   }
-  if (lastView?.pb === pb && lastView.sessionId === session.id) return { ...lastView.value, title: session.title }
+  let built = lastView?.pb === pb && lastView.sessionId === session.id ? lastView.built : null
+  if (!built) {
+    built = await building.run(async () => {
+      const value = await buildView(env, session, pb)
+      lastView = { sessionId: session.id, pb, built: value }
+      return value
+    }, pb)
+  }
+  // タイトルはホストが変えたらすぐ出す
+  if (built.view.title !== session.title) built = await finish({ ...built.view, title: session.title })
+  return { ...built, endsInMs: pb.endsAt === null ? null : Math.max(0, pb.endsAt - Date.now()) }
+}
+
+async function finish(view: StateView): Promise<Built> {
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-1', new TextEncoder().encode(JSON.stringify(view))))
+  return { v: [...hash.slice(0, 8)].map((b) => b.toString(16).padStart(2, '0')).join(''), view }
+}
+
+async function buildView(env: Env, session: Session, pb: Playback): Promise<Built> {
   await syncSession(env, session, pb)
 
   // 過去のリクエストは増え続けるので全部は読まず、待っている分と、今の曲の分だけ読む。
   // いま流れている曲が直近に再生済みになったリクエストなら、その人の名前を出す
   const recent = Date.now() - (pb.current?.durationMs ?? 0) - 60_000
   const [waiting, playing] = await env.DB.batch<RequestRow>([
-    env.DB.prepare('SELECT track_uri, nickname, comment FROM requests WHERE session_id = ? AND played_at IS NULL ORDER BY id')
-      .bind(session.id),
     env.DB.prepare(
-      `SELECT track_uri, nickname, comment FROM requests WHERE session_id = ? AND played_at > ? AND track_uri = ?
-       ORDER BY played_at DESC, id DESC LIMIT 1`,
+      `SELECT track_uri, track_name, artist, image_url, nickname, comment FROM requests
+       WHERE session_id = ? AND played_at IS NULL ORDER BY id`,
+    ).bind(session.id),
+    env.DB.prepare(
+      `SELECT track_uri, track_name, artist, image_url, nickname, comment FROM requests
+       WHERE session_id = ? AND played_at > ? AND track_uri = ? ORDER BY played_at DESC, id DESC LIMIT 1`,
     ).bind(session.id, recent, pb.current?.uri ?? ''),
   ])
 
   const info = (r: RequestRow | undefined): RequestInfo | null => (r ? { nickname: r.nickname, comment: r.comment } : null)
 
-  const current: StateView['current'] = pb.current ? { ...pb.current, request: info(playing.results[0]) } : null
-
-  const pending = [...waiting.results]
-  const next = pb.next.slice(0, 6).map((t) => {
-    const i = pending.findIndex((r) => r.track_uri === t.uri)
-    const req = i >= 0 ? pending.splice(i, 1)[0] : undefined
-    return { ...t, request: info(req) }
-  })
+  // Spotify が返した「次の曲」の後ろに、見えている範囲より先のリクエストをつなぐ
+  const { matched, beyond } = matchQueue(waiting.results, pb.next.map((t) => t.uri), pb.more && pb.repeat !== 'track')
+  let next: NextTrack[] = [
+    ...pb.next.map((t, i) => ({ uri: t.uri, name: t.name, artist: t.artist, image: t.image, request: info(matched[i]) })),
+    ...beyond.map((r) => ({ uri: r.track_uri, name: r.track_name, artist: r.artist, image: r.image_url ?? '', request: info(r) })),
+  ]
+  // キューだけ取れなかったときは、一覧を空にせず前のものを出しておく
+  if (!pb.queue && pb.deviceId && lastView?.sessionId === session.id && lastView.built.view.current?.uri === pb.current?.uri) {
+    next = lastView.built.view.next
+  }
 
   let notice: string | null = null
   if (!pb.deviceId) notice = 'ホストの端末で Spotify が開かれていません'
   // デフォルト曲は曲を直接指定して流すので context が無い。context があるならアルバムなど別のものを流している
   else if (pb.contextUri) notice = 'デフォルト曲以外（アルバムやプレイリスト）を再生中です'
 
-  const value = { isPlaying: pb.isPlaying, current, next, repeat: pb.repeat, title: session.title, notice }
-  lastView = { sessionId: session.id, pb, value }
-  return value
+  return finish({
+    isPlaying: pb.isPlaying,
+    current: pb.current ? { ...pb.current, request: info(playing.results[0]) } : null,
+    next,
+    repeat: pb.repeat,
+    title: session.title,
+    notice,
+  })
 }
