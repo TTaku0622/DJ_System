@@ -59,7 +59,8 @@ if (defaults) {
     node.append(...children.filter(Boolean))
     return node
   }
-  const art = (src) => (src ? el('img', { src, alt: '', loading: 'lazy' }) : el('span', { class: 'noart' }))
+  // loading は src より先に付ける（Safari は src を付けた時点で読み始めるので、後だと全部の画像を一度に読んでしまう）
+  const art = (src) => (src ? el('img', { loading: 'lazy', alt: '', src }) : el('span', { class: 'noart' }))
   const row = (t, button) =>
     el('li', { class: 'track' }, art(t.image),
       el('div', { class: 't' }, el('div', { class: 'name', text: t.name }), el('div', { class: 'sub', text: t.artist })),
@@ -70,7 +71,8 @@ if (defaults) {
   async function call(path, body) {
     const res = await fetch(path, body
       ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-      : { cache: 'no-store' })
+      : { cache: 'no-store' }).catch(() => null)
+    if (!res) throw new Error('通信できていません。電波を確かめてください')
     const json = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(json.error || 'エラーが起きました')
     return json
@@ -117,7 +119,9 @@ if (defaults) {
   }
 
   const box = $('default-results-box')
+  let searches = 0
   const closeResults = () => {
+    searches++ // 検索中に閉じたら、あとから届いた結果は使わない
     box.hidden = true
     $('default-results').replaceChildren()
     $('dq').value = ''
@@ -129,18 +133,21 @@ if (defaults) {
     const q = $('dq').value.trim()
     if (!q) return
     $('dq').blur()
+    const mine = ++searches
     const results = $('default-results')
     $('default-results-title').textContent = `「${q}」の検索結果`
     results.replaceChildren(el('li', { class: 'empty', text: '検索中…' }))
     box.hidden = false
     try {
       const { tracks } = await call(`/host/api/search?q=${encodeURIComponent(q)}`)
+      if (mine !== searches) return // 次の検索を始めていたら、前の結果で上書きしない
       results.replaceChildren(...tracks.map((t) => row(t, el('button', {
         type: 'button', class: 'icon-btn primary', 'aria-label': `${t.name} をデフォルト曲に追加`, text: '＋',
         onclick: (ev) => add(t, ev.currentTarget),
       }))))
       if (tracks.length === 0) results.append(el('li', { class: 'empty', text: '見つかりませんでした' }))
     } catch (err) {
+      if (mine !== searches) return
       results.replaceChildren(el('li', { class: 'empty', text: err.message }))
     }
   })

@@ -9,6 +9,16 @@ const store = {
   set(key, value) { try { localStorage.setItem(key, value) } catch {} },
 }
 
+// サーバーが返した文だけを画面に出す（通信エラーの英語の文や、JSON でないエラー画面の中身は出さない）
+class ServerError extends Error {}
+async function call(path, options) {
+  const res = await fetch(API + path, options)
+  const json = await res.json().catch(() => null)
+  if (!res.ok || !json) throw Object.assign(new ServerError(json?.error ?? ''), { duplicate: json?.duplicate })
+  return json
+}
+const shown = (err, fallback) => (err instanceof ServerError && err.message) || fallback
+
 // 文字列はすべて textContent で入れる（曲名やコメントに HTML が入っていても安全）
 function el(tag, props = {}, ...children) {
   const node = document.createElement(tag)
@@ -22,8 +32,9 @@ function el(tag, props = {}, ...children) {
   return node
 }
 
+// loading は src より先に付ける（Safari は src を付けた時点で読み始めるので、後だと全部の画像を一度に読んでしまう）
 function art(src) {
-  return src ? el('img', { src, alt: '', loading: 'lazy' }) : el('span', { class: 'noart' })
+  return src ? el('img', { loading: 'lazy', alt: '', src }) : el('span', { class: 'noart' })
 }
 
 function requestLabel(req) {
@@ -217,7 +228,9 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) poll
 // ---- 検索 ----
 const resultsBox = $('results-box')
 function openResults() { resultsBox.hidden = false }
+let searches = 0
 function closeResults() {
+  searches++ // 検索中に閉じたら、あとから届いた結果は使わない
   resultsBox.hidden = true
   $('results').replaceChildren()
   $('q').value = ''
@@ -230,21 +243,22 @@ $('search-form').addEventListener('submit', async (e) => {
   const q = input.value.trim()
   if (!q) return
   input.blur() // キーボードを閉じて結果を見やすく
+  const mine = ++searches
   const results = $('results')
   $('results-title').textContent = `「${q}」の検索結果`
   results.replaceChildren(el('li', { class: 'empty', text: '検索中…' }))
   openResults()
   try {
-    const res = await fetch(`${API}/search?q=${encodeURIComponent(q)}`)
-    const { tracks, error } = await res.json()
-    if (!res.ok) throw new Error(error)
+    const { tracks } = await call(`/search?q=${encodeURIComponent(q)}`)
+    if (mine !== searches) return // 次の検索を始めていたら、前の結果で上書きしない
     results.replaceChildren(...tracks.map((t) => trackRow(t, el('div', { class: 'btns' },
       el('button', { type: 'button', class: 'icon-btn primary', 'aria-label': `${t.name} をそのまま追加`, text: '＋', onclick: (ev) => add(t, null, null, ev.currentTarget) }),
       el('button', { type: 'button', class: 'icon-btn', 'aria-label': `${t.name} を名前・コメント付きで追加`, text: '✎', onclick: () => openMessage(t) }),
     ))))
     if (tracks.length === 0) results.append(el('li', { class: 'empty', text: '見つかりませんでした' }))
   } catch (err) {
-    results.replaceChildren(el('li', { class: 'empty', text: err.message || '検索できませんでした' }))
+    if (mine !== searches) return
+    results.replaceChildren(el('li', { class: 'empty', text: shown(err, '検索できませんでした') }))
   }
 })
 
@@ -252,20 +266,18 @@ $('search-form').addEventListener('submit', async (e) => {
 async function add(t, nickname, comment, button) {
   if (button) button.disabled = true
   try {
-    const res = await fetch(`${API}/requests`, {
+    const json = await call('/requests', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uri: t.uri, name: t.name, artist: t.artist, image: t.image, nickname, comment }),
     })
-    const json = await res.json()
-    if (!res.ok) throw Object.assign(new Error(json.error), { duplicate: json.duplicate })
     toast(json.ahead === 0 ? `「${t.name}」を追加しました・次に流れます` : `「${t.name}」を追加しました・あと${json.ahead}曲のあとに流れます`)
     closeResults()
     hurry = true
     setTimeout(poll, 800)
   } catch (err) {
     // 同じ曲がもう入っているのは失敗ではないので、赤くしない
-    toast(err.message || '追加できませんでした', !err.duplicate)
+    toast(shown(err, '追加できませんでした'), !err.duplicate)
     if (button) button.disabled = false
   }
 }

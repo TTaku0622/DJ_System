@@ -273,7 +273,11 @@ app.get('/api/s/:id/search', async (c) => {
   return c.json({ tracks: await searchTracks(c.env, q) })
 })
 
-const clean = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null)
+// 絵文字の途中で切れないよう、1文字ずつ数えて切る
+const clean = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? [...v.trim()].slice(0, max).join('') : null)
+
+// 全員の画面に出るので、Spotify の画像だけを受け付ける
+const cleanImage = (v: unknown) => (typeof v === 'string' && /^https:\/\/[\w.-]+\.(scdn\.co|spotifycdn\.com)\/[\w./-]+$/.test(v) ? v : '')
 
 app.post('/api/s/:id/requests', async (c) => {
   // JSON 以外は受け付けない（よそのサイトのフォームから勝手に追加させないため）
@@ -287,7 +291,7 @@ app.post('/api/s/:id/requests', async (c) => {
       uri,
       name,
       artist: clean(body.artist, 200) ?? '',
-      image: clean(body.image, 300) ?? '',
+      image: cleanImage(body.image),
       nickname: clean(body.nickname, 20),
       comment: clean(body.comment, 60),
     })
